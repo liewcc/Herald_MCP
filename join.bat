@@ -4,9 +4,11 @@ title Herald MCP - Installation
 cd /d "%~dp0"
 
 :: ── Step 1: Popup — ask for server URL ──────────────────────────────────────
-> "%TEMP%\herald_ask.vbs" echo Set oShell = CreateObject("WScript.Shell")
->> "%TEMP%\herald_ask.vbs" echo url = InputBox("Please paste the Herald server address" & Chr(10) & "provided by your network administrator:", "Herald MCP Setup", "http://")
->> "%TEMP%\herald_ask.vbs" echo WScript.Echo url
+(
+echo Set oShell = CreateObject^("WScript.Shell"^)
+echo url = InputBox^("Please paste the Herald server address" ^& Chr^(10^) ^& "provided by your network administrator:", "Herald MCP Setup", "http://"^)
+echo WScript.Echo url
+) > "%TEMP%\herald_ask.vbs"
 
 for /f "delims=" %%i in ('cscript //nologo "%TEMP%\herald_ask.vbs"') do set "SERVER_URL=%%i"
 del "%TEMP%\herald_ask.vbs" >nul 2>&1
@@ -80,6 +82,8 @@ if %ERRORLEVEL% equ 0 (
 
 :: ── Done ─────────────────────────────────────────────────────────────────────
 echo.
-> "%TEMP%\herald_done.vbs" echo MsgBox "Herald MCP installed successfully!" & Chr(10) & Chr(10) & "Next step: restart Claude Code or Antigravity," & Chr(10) & "then ask Claude to call list_peers() to verify.", 64, "Herald MCP - Done"
+(
+echo MsgBox "Herald MCP installed successfully!" ^& Chr^(10^) ^& Chr^(10^) ^& "Next step: restart Claude Code or Antigravity," ^& Chr^(10^) ^& "then ask Claude to call list_peers^(^) to verify.", 64, "Herald MCP - Done"
+) > "%TEMP%\herald_done.vbs"
 cscript //nologo "%TEMP%\herald_done.vbs"
 del "%TEMP%\herald_done.vbs" >nul 2>&1
