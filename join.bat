@@ -60,12 +60,12 @@ echo   [OK] Dependencies installed.
 :: ── Step 4: Write config.json ────────────────────────────────────────────────
 echo.
 echo [3/4] Writing config.json...
-set "MACHINE_NAME=%COMPUTERNAME%"
-for %%i in (A B C D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
-    set "MACHINE_NAME=!MACHINE_NAME:%%i=%%i!"
+python -c "import json,os,sys; cfg={'name':os.environ['COMPUTERNAME'].lower(),'server_url':sys.argv[1],'peers':['machine-a']}; open(sys.argv[2],'w',encoding='utf-8').write(json.dumps(cfg,indent=2))" "!SERVER_URL!" "%~dp0config.json"
+if %ERRORLEVEL% neq 0 (
+    echo   ERROR: Failed to write config.json.
+    pause
+    exit /b 1
 )
-:: Use lowercase computer name, fallback to machine-b
-powershell -NoProfile -Command "$name = $env:COMPUTERNAME.ToLower(); $cfg = [ordered]@{ name=$name; server_url='!SERVER_URL!'; peers=@('machine-a') }; $cfg | ConvertTo-Json | Set-Content '%~dp0config.json' -Encoding UTF8"
 echo   [OK] config.json created (name: %COMPUTERNAME%).
 
 :: ── Step 5: Register MCP ─────────────────────────────────────────────────────
