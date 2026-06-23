@@ -71,11 +71,11 @@ echo.
 echo [4/4] Registering Herald with Claude Code...
 where claude >nul 2>&1
 if %ERRORLEVEL% equ 0 (
-    claude mcp add herald -- python "%~dp0run.py" >nul 2>&1
+    claude mcp add herald -- python "%~dp0mcp_server.py" >nul 2>&1
     echo   [OK] Registered with Claude Code.
 ) else (
     echo   NOTE: Claude Code not found - skipping MCP registration.
-    echo   Run manually later: claude mcp add herald -- python "%~dp0run.py"
+    echo   Run manually later: claude mcp add herald -- python "%~dp0mcp_server.py"
 )
 
 :: ── Done ─────────────────────────────────────────────────────────────────────

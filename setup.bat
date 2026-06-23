@@ -23,21 +23,21 @@ where claude >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo   WARNING: claude CLI not found in PATH.
     echo   Run this command manually after installing Claude Code:
-    echo     claude mcp add herald -- python "%~dp0run.py"
+    echo     claude mcp add herald -- python "%~dp0mcp_server.py"
     goto :register_antigravity
 )
 
 set /p REGISTER_MCP="  Register herald with Claude Code now? (y/n): "
 if /i not "%REGISTER_MCP%"=="y" (
     echo   Skipped. Run manually when ready:
-    echo     claude mcp add herald -- python "%~dp0run.py"
+    echo     claude mcp add herald -- python "%~dp0mcp_server.py"
     goto :register_antigravity
 )
 
-claude mcp add herald -- python "%~dp0run.py"
+claude mcp add herald -- python "%~dp0mcp_server.py"
 if %ERRORLEVEL% neq 0 (
     echo   WARNING: Registration failed. Try running manually:
-    echo     claude mcp add herald -- python "%~dp0run.py"
+    echo     claude mcp add herald -- python "%~dp0mcp_server.py"
     goto :register_antigravity
 )
 
@@ -66,7 +66,7 @@ if not defined AGY_FOUND (
     echo     "mcpServers": {
     echo       "herald": {
     echo         "command": "python",
-    echo         "args": ["PATH_TO_HERALD_MCP\run.py"]
+    echo         "args": ["PATH_TO_HERALD_MCP\mcp_server.py"]
     echo       }
     echo     }
     echo   }
@@ -86,7 +86,7 @@ if /i not "%REGISTER_AGY%"=="y" (
 )
 
 python -c "import os; f=open(os.path.expandvars(r'%%TEMP%%\herald_mcp_register.py'), 'w', encoding='utf-8'); f.write('import sys, os, json\np = os.path.expandvars(r\'%%USERPROFILE%%/.gemini/config/mcp_config.json\')\nos.makedirs(os.path.dirname(p), exist_ok=True)\nd = {}\nif os.path.exists(p):\n    try:\n        with open(p, encoding=\'utf-8\') as f: d = json.load(f)\n    except: pass\nif \'mcpServers\' not in d: d[\'mcpServers\'] = {}\nd[\'mcpServers\'][\'herald\'] = {\'command\': \'python\', \'args\': [sys.argv[1]]}\nwith open(p, \'w\', encoding=\'utf-8\') as f: json.dump(d, f, indent=2)\n')"
-python "%TEMP%\herald_mcp_register.py" "%~dp0run.py"
+python "%TEMP%\herald_mcp_register.py" "%~dp0mcp_server.py"
 if exist "%TEMP%\herald_mcp_register.py" del "%TEMP%\herald_mcp_register.py"
 if %ERRORLEVEL% neq 0 (
     echo   WARNING: Could not write config. Check %%USERPROFILE%%\.gemini\config\mcp_config.json
@@ -106,7 +106,7 @@ echo ============================================
 echo  Setup complete!
 echo.
 echo  Next steps:
-echo  1. Edit config.json — fill in your peer's Tailscale IP.
+echo  1. Edit config.json — fill in server_url and your machine name.
 echo  2. Restart Claude Code (or Antigravity) to load the herald MCP.
 echo  3. Ask Claude to call list_peers() to confirm Herald is working.
 echo ============================================
