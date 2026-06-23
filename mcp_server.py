@@ -1,4 +1,6 @@
+import base64
 import json
+import mimetypes
 import time
 import uuid
 from pathlib import Path
@@ -118,6 +120,97 @@ async def ping_peer(peer_name: str) -> dict:
             return {"online": r.status_code == 200, "latency_ms": ms}
         except Exception as e:
             return {"online": False, "error": str(e)}
+
+@mcp.tool()
+async def send_file(peer_name: str, file_path: str, message: str = "") -> dict:
+    """Send a file or image to a named peer's Claude.
+
+    Args:
+        peer_name: Target peer name (from config.json peers list).
+        file_path: Absolute path to the file to send (max 5MB).
+        message: Optional text message to accompany the file.
+    """
+    try:
+        config = load_config()
+    except Exception as e:
+        return {"error": str(e)}
+
+    path = Path(file_path)
+    if not path.exists():
+        return {"error": f"File not found: {file_path}"}
+
+    size = path.stat().st_size
+    if size > 5 * 1024 * 1024:
+        return {"error": f"File too large ({size // 1024 // 1024} MB). Maximum is 5 MB."}
+
+    mime_type, _ = mimetypes.guess_type(str(path))
+    if not mime_type:
+        mime_type = "application/octet-stream"
+
+    data_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+
+    payload = {
+        "message_id": str(uuid.uuid4()),
+        "from_peer": config.get("name", "unknown"),
+        "to_peer": peer_name,
+        "message": message or f"File: {path.name}",
+        "attachments": [{"filename": path.name, "mime_type": mime_type, "data_b64": data_b64}],
+    }
+
+    async with httpx.AsyncClient(timeout=305.0) as client:
+        try:
+            r = await client.post(server_url(config, "/ask"), json=payload)
+            return r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}", "detail": r.text}
+        except httpx.TimeoutException:
+            return {"error": "timeout"}
+        except Exception as e:
+            return {"error": str(e)}
+
+
+@mcp.tool()
+async def save_attachment(message_id: str, save_dir: str) -> dict:
+    """Decode and save attachments from a pending message to a local directory.
+
+    Args:
+        message_id: The message ID from get_pending().
+        save_dir: Directory path where files will be saved.
+    """
+    try:
+        config = load_config()
+    except Exception as e:
+        return {"error": str(e)}
+
+    name = config.get("name", "")
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            r = await client.get(server_url(config, "/pending"), params={"peer": name})
+            if r.status_code != 200:
+                return {"error": f"HTTP {r.status_code}"}
+            messages = r.json()
+        except Exception as e:
+            return {"error": str(e)}
+
+    msg = next((m for m in messages if m.get("message_id") == message_id), None)
+    if not msg:
+        return {"error": f"Message '{message_id}' not found in pending inbox"}
+
+    attachments = msg.get("attachments", [])
+    if not attachments:
+        return {"saved": [], "count": 0, "note": "No attachments in this message"}
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = []
+    for att in attachments:
+        filename = att.get("filename", "attachment")
+        data = base64.b64decode(att.get("data_b64", ""))
+        out_path = out_dir / filename
+        out_path.write_bytes(data)
+        saved.append(str(out_path))
+
+    return {"saved": saved, "count": len(saved)}
+
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")
