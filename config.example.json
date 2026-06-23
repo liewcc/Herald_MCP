@@ -1,0 +1,5 @@
+{
+  "name": "machine-a",
+  "server_url": "http://YOUR_SERVER_IP:7700",
+  "peers": ["machine-b"]
+}
