@@ -5,3 +5,4 @@ __pycache__/
 .claude/
 HANDOFF.md
 *.md
+!README.md
