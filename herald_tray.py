@@ -101,6 +101,7 @@ def invoke_claude_reply(project_dir: str) -> None:
     subprocess.Popen(
         [claude_exe, "-p", REPLY_PROMPT, "--allowedTools", ALLOWED_TOOLS],
         cwd=project_dir,
+        creationflags=subprocess.CREATE_NO_WINDOW,
     )
 
 
