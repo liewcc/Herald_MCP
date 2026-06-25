@@ -241,10 +241,13 @@ class HeraldWindow:
             self.status_dot.config(fg="#cc3333")
             self.status_label.config(text="Disconnected")
 
-    def append_message(self, from_peer: str, msg_id: str, auto_replied: bool = False):
+    def append_message(self, from_peer: str, msg_id: str, auto_replied: bool = False, event_type: str = "message"):
         ts = time.strftime("%H:%M:%S")
-        suffix = "  → auto-replied" if auto_replied else ""
-        line = f"[{ts}] from {from_peer}  |  ID: {msg_id[:8]}…{suffix}\n"
+        if event_type == "deposit":
+            line = f"[{ts}] deposit from {from_peer}  |  ID: {msg_id[:8]}…\n"
+        else:
+            suffix = "  → auto-replied" if auto_replied else ""
+            line = f"[{ts}] from {from_peer}  |  ID: {msg_id[:8]}…{suffix}\n"
         self.log.config(state="normal")
         self.log.insert("end", line)
         self.log.see("end")
@@ -256,9 +259,11 @@ class HeraldWindow:
                 event = self.msg_queue.get_nowait()
                 if event["type"] == "status":
                     self.set_status(event["connected"])
-                elif event["type"] == "message":
-                    auto_replied = event.get("auto_replied", False)
-                    self.append_message(event["from_peer"], event["message_id"], auto_replied)
+                elif event["type"] in ("message", "deposit"):
+                    self.append_message(
+                        event["from_peer"], event["message_id"],
+                        event.get("auto_replied", False), event["type"]
+                    )
         except queue.Empty:
             pass
         self.root.after(300, self._poll_messages)
@@ -287,19 +292,26 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
                         if not line.startswith("data:"):
                             continue
                         payload = json.loads(line[5:].strip())
+                        event_type = payload.get("type", "message")
                         from_peer = payload.get("from_peer", "?")
-                        msg_id = payload.get("message_id", "?")
 
-                        auto_reply = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("auto_reply", False)
-                        if auto_reply:
-                            invoke_claude_reply(project_dir)
-
-                        msg_queue.put({
-                            "type": "message",
-                            "from_peer": from_peer,
-                            "message_id": msg_id,
-                            "auto_replied": auto_reply,
-                        })
+                        if event_type == "deposit":
+                            msg_queue.put({
+                                "type": "deposit",
+                                "from_peer": from_peer,
+                                "message_id": payload.get("deposit_id", "?"),
+                            })
+                        else:
+                            msg_id = payload.get("message_id", "?")
+                            auto_reply = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("auto_reply", False)
+                            if auto_reply:
+                                invoke_claude_reply(project_dir)
+                            msg_queue.put({
+                                "type": "message",
+                                "from_peer": from_peer,
+                                "message_id": msg_id,
+                                "auto_replied": auto_reply,
+                            })
         except Exception:
             pass
         msg_queue.put({"type": "status", "connected": False})

@@ -27,12 +27,28 @@ except Exception:
 
 port = config.get("port", 7700)
 
-app = FastAPI(title="Herald MCP Long-poll Server")
+async def _cleanup_deposits():
+    while True:
+        await asyncio.sleep(60)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        expired = [k for k, v in list(deposits.items())
+                   if datetime.datetime.fromisoformat(v["expires_at"]) <= now]
+        for k in expired:
+            deposits.pop(k, None)
 
-# In-memory store (three dicts):
-pending_messages: dict[str, dict] = {}  # message_id -> {message_id, from_peer, message, attachments, received_at}
-reply_events: dict[str, tuple[asyncio.Event, dict|None]] = {}  # message_id -> (event, reply_data)
+@contextlib.asynccontextmanager
+async def lifespan(app):
+    task = asyncio.create_task(_cleanup_deposits())
+    yield
+    task.cancel()
+
+app = FastAPI(title="Herald MCP Long-poll Server", lifespan=lifespan)
+
+# In-memory store:
+pending_messages: dict[str, dict] = {}
+reply_events: dict[str, tuple[asyncio.Event, dict|None]] = {}
 subscribers: dict[str, asyncio.Queue] = {}
+deposits: dict[str, dict] = {}  # deposit_id -> deposit record
 
 class AskBody(BaseModel):
     message_id: str
@@ -44,6 +60,15 @@ class AskBody(BaseModel):
 class ReplyBody(BaseModel):
     answer: str
     attachments: List[Any] = []
+
+class DepositBody(BaseModel):
+    from_peer: str
+    to_peer: str
+    filename: str
+    data_b64: str
+    content_type: str = "application/octet-stream"
+    message: str = ""
+    expires_minutes: int = 30
 
 async def check_disconnect(request: Request, message_id: str):
     try:
@@ -80,6 +105,7 @@ async def ask(request: Request, body: AskBody):
     # Notify subscriber if registered
     if body.to_peer in subscribers:
         await subscribers[body.to_peer].put({
+            "type": "message",
             "message_id": message_id,
             "from_peer": body.from_peer
         })
@@ -157,6 +183,40 @@ async def get_pending(peer: str = ""):
     if peer:
         msgs = [m for m in msgs if m.get("to_peer") == peer]
     return msgs
+
+@app.post("/deposit")
+async def deposit(body: DepositBody):
+    deposit_id = str(uuid.uuid4())
+    expires_at = (datetime.datetime.now(datetime.timezone.utc)
+                  + datetime.timedelta(minutes=body.expires_minutes))
+    deposits[deposit_id] = {
+        "deposit_id": deposit_id,
+        "from_peer": body.from_peer,
+        "to_peer": body.to_peer,
+        "filename": body.filename,
+        "data_b64": body.data_b64,
+        "content_type": body.content_type,
+        "message": body.message,
+        "expires_at": expires_at.isoformat(),
+    }
+    if body.to_peer in subscribers:
+        await subscribers[body.to_peer].put({
+            "type": "deposit",
+            "deposit_id": deposit_id,
+            "from_peer": body.from_peer,
+            "filename": body.filename,
+        })
+    return {"deposit_id": deposit_id}
+
+@app.get("/deposits")
+async def get_deposits(peer: str = ""):
+    now = datetime.datetime.now(datetime.timezone.utc)
+    result = [d for d in deposits.values()
+              if d.get("to_peer") == peer
+              and datetime.datetime.fromisoformat(d["expires_at"]) > now]
+    for d in result:
+        deposits.pop(d["deposit_id"], None)
+    return result
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=port)

@@ -168,6 +168,80 @@ async def send_file(peer_name: str, file_path: str, message: str = "") -> dict:
 
 
 @mcp.tool()
+async def deposit_file(peer_name: str, file_path: str, message: str = "", expires_minutes: int = 30) -> dict:
+    """Send a file to a peer non-blocking (no reply needed — avoids deadlock).
+
+    Args:
+        peer_name: Target peer name.
+        file_path: Absolute path to the file to send (max 5MB).
+        message: Optional text message.
+        expires_minutes: How long the deposit is kept on the server (default 30).
+    """
+    try:
+        config = load_config()
+    except Exception as e:
+        return {"error": str(e)}
+
+    path = Path(file_path)
+    if not path.exists():
+        return {"error": f"File not found: {file_path}"}
+    if path.stat().st_size > 5 * 1024 * 1024:
+        return {"error": "File too large (max 5MB)"}
+
+    mime_type, _ = mimetypes.guess_type(str(path))
+    payload = {
+        "from_peer": config.get("name", "unknown"),
+        "to_peer": peer_name,
+        "filename": path.name,
+        "data_b64": base64.b64encode(path.read_bytes()).decode("ascii"),
+        "content_type": mime_type or "application/octet-stream",
+        "message": message or f"File: {path.name}",
+        "expires_minutes": expires_minutes,
+    }
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            r = await client.post(server_url(config, "/deposit"), json=payload)
+            return r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+
+@mcp.tool()
+async def get_deposits(save_dir: str = "") -> list:
+    """Retrieve files deposited for this machine (non-blocking). Optionally save to save_dir.
+
+    Args:
+        save_dir: If provided, save received files to this directory.
+    """
+    try:
+        config = load_config()
+    except Exception as e:
+        return [{"error": str(e)}]
+
+    name = config.get("name", "")
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            r = await client.get(server_url(config, "/deposits"), params={"peer": name})
+            if r.status_code != 200:
+                return [{"error": f"HTTP {r.status_code}"}]
+            items = r.json()
+        except Exception as e:
+            return [{"error": str(e)}]
+
+    if not save_dir or not items:
+        return items
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for item in items:
+        filename = item.get("filename", "deposit")
+        data = base64.b64decode(item.get("data_b64", ""))
+        (out_dir / filename).write_bytes(data)
+        item["saved_to"] = str(out_dir / filename)
+    return items
+
+
+@mcp.tool()
 async def save_attachment(message_id: str, save_dir: str) -> dict:
     """Decode and save attachments from a pending message to a local directory.
 
