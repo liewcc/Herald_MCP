@@ -115,7 +115,7 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo   Starting Herald tray now...
-start "" pythonw "%~dp0herald_tray.py"
+for /f "delims=" %%p in ('python -c "import sys,os; print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))"') do start "" "%%p" "%~dp0herald_tray.py"
 
 echo.
 echo ============================================
