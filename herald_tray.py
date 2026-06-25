@@ -5,11 +5,16 @@ Left-click tray icon  → open/focus the Herald window
 Close window (X)      → minimize back to tray (keeps running)
 Right-click tray icon → Exit
 
+Auto Reply: when enabled, invokes claude.exe once per incoming message (event-driven,
+            NOT a timer — zero token cost while idle).
+
 Auto-start: python herald_tray.py --install
 """
 import json
 import os
 import queue
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -27,11 +32,22 @@ STARTUP_LNK = (
     / "Microsoft/Windows/Start Menu/Programs/Startup/herald_tray.lnk"
 )
 
+REPLY_PROMPT = (
+    "Use the herald MCP tools. Call get_pending to retrieve incoming messages. "
+    "For each message, process it and call reply with an appropriate response. "
+    "When done, exit."
+)
+ALLOWED_TOOLS = "mcp__herald__get_pending,mcp__herald__reply"
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def save_config(cfg: dict) -> None:
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
 # ── Tray icon image ───────────────────────────────────────────────────────────
@@ -66,21 +82,45 @@ def uninstall_startup() -> None:
     STARTUP_LNK.unlink(missing_ok=True)
 
 
+# ── Claude auto-reply ─────────────────────────────────────────────────────────
+
+def find_claude_exe() -> str | None:
+    base = Path(os.environ.get("APPDATA", "")) / "Claude" / "claude-code"
+    if base.exists():
+        for d in sorted(base.iterdir(), key=lambda p: p.name, reverse=True):
+            exe = d / "claude.exe"
+            if exe.exists():
+                return str(exe)
+    return shutil.which("claude")
+
+
+def invoke_claude_reply(project_dir: str) -> None:
+    claude_exe = find_claude_exe()
+    if not claude_exe:
+        return
+    subprocess.Popen(
+        [claude_exe, "-p", REPLY_PROMPT, "--allowedTools", ALLOWED_TOOLS],
+        cwd=project_dir,
+    )
+
+
 # ── Herald UI window ──────────────────────────────────────────────────────────
 
 class HeraldWindow:
-    def __init__(self, peer_name: str, msg_queue: queue.Queue):
-        self.peer_name = peer_name
+    def __init__(self, cfg: dict, msg_queue: queue.Queue):
+        self.cfg = cfg
+        self.peer_name = cfg["name"]
         self.msg_queue = msg_queue
+        self.project_dir = str(Path(__file__).parent)
 
         self.root = tk.Tk()
-        self.root.title(f"Herald — {peer_name}")
-        self.root.geometry("420x340")
+        self.root.title(f"Herald — {self.peer_name}")
+        self.root.geometry("420x360")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
 
         self._build_ui()
-        self.root.withdraw()  # start hidden in tray
+        self.root.withdraw()
         self.root.after(300, self._poll_messages)
 
     def _build_ui(self):
@@ -129,6 +169,14 @@ class HeraldWindow:
             font=("Segoe UI", 9),
         ).pack(side="left")
 
+        self.autoreply_var = tk.BooleanVar(value=self.cfg.get("auto_reply", False))
+        tk.Checkbutton(
+            bottom, text="Auto Reply",
+            variable=self.autoreply_var,
+            command=self._toggle_autoreply,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(12, 0))
+
         tk.Button(
             bottom, text="Exit", command=self._exit,
             font=("Segoe UI", 9), relief="flat", bd=1,
@@ -140,6 +188,10 @@ class HeraldWindow:
             install_startup()
         else:
             uninstall_startup()
+
+    def _toggle_autoreply(self):
+        self.cfg["auto_reply"] = self.autoreply_var.get()
+        save_config(self.cfg)
 
     def _exit(self):
         self.root.destroy()
@@ -161,9 +213,10 @@ class HeraldWindow:
             self.status_dot.config(fg="#cc3333")
             self.status_label.config(text="Disconnected")
 
-    def append_message(self, from_peer: str, msg_id: str):
+    def append_message(self, from_peer: str, msg_id: str, auto_replied: bool = False):
         ts = time.strftime("%H:%M:%S")
-        line = f"[{ts}] from {from_peer}  |  ID: {msg_id[:8]}…\n"
+        suffix = "  → auto-replied" if auto_replied else ""
+        line = f"[{ts}] from {from_peer}  |  ID: {msg_id[:8]}…{suffix}\n"
         self.log.config(state="normal")
         self.log.insert("end", line)
         self.log.see("end")
@@ -176,7 +229,8 @@ class HeraldWindow:
                 if event["type"] == "status":
                     self.set_status(event["connected"])
                 elif event["type"] == "message":
-                    self.append_message(event["from_peer"], event["message_id"])
+                    auto_replied = event.get("auto_replied", False)
+                    self.append_message(event["from_peer"], event["message_id"], auto_replied)
         except queue.Empty:
             pass
         self.root.after(300, self._poll_messages)
@@ -187,9 +241,12 @@ class HeraldWindow:
 
 # ── SSE background thread ─────────────────────────────────────────────────────
 
-def sse_thread(server_url: str, peer_name: str,
-               msg_queue: queue.Queue, running: threading.Event) -> None:
+def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
+               project_dir: str) -> None:
+    server_url = cfg["server_url"]
+    peer_name = cfg["name"]
     url = f"{server_url.rstrip('/')}/subscribe"
+
     while running.is_set():
         try:
             with httpx.Client(timeout=None) as client:
@@ -198,15 +255,23 @@ def sse_thread(server_url: str, peer_name: str,
                     for line in r.iter_lines():
                         if not running.is_set():
                             return
-                        if line.startswith("data:"):
-                            payload = json.loads(line[5:].strip())
-                            from_peer = payload.get("from_peer", "?")
-                            msg_id = payload.get("message_id", "?")
-                            msg_queue.put({
-                                "type": "message",
-                                "from_peer": from_peer,
-                                "message_id": msg_id,
-                            })
+                        if not line.startswith("data:"):
+                            continue
+                        payload = json.loads(line[5:].strip())
+                        from_peer = payload.get("from_peer", "?")
+                        msg_id = payload.get("message_id", "?")
+
+                        # Reload config each time to pick up latest auto_reply setting
+                        auto_reply = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("auto_reply", False)
+                        if auto_reply:
+                            invoke_claude_reply(project_dir)
+
+                        msg_queue.put({
+                            "type": "message",
+                            "from_peer": from_peer,
+                            "message_id": msg_id,
+                            "auto_replied": auto_reply,
+                        })
         except Exception:
             pass
         msg_queue.put({"type": "status", "connected": False})
@@ -223,30 +288,27 @@ def main() -> None:
         return
 
     cfg = load_config()
-    peer_name = cfg["name"]
-    server_url = cfg["server_url"]
+    project_dir = str(Path(__file__).parent)
 
     msg_queue: queue.Queue = queue.Queue()
     running = threading.Event()
     running.set()
 
-    win = HeraldWindow(peer_name, msg_queue)
+    win = HeraldWindow(cfg, msg_queue)
 
-    # SSE thread
     threading.Thread(
         target=sse_thread,
-        args=(server_url, peer_name, msg_queue, running),
+        args=(cfg, msg_queue, running, project_dir),
         daemon=True,
     ).start()
 
-    # System tray icon
     def on_click(icon, item):
         win.show()
 
     icon = pystray.Icon(
         name="herald",
         icon=make_icon_image(),
-        title=f"Herald ({peer_name})",
+        title=f"Herald ({cfg['name']})",
         menu=pystray.Menu(
             pystray.MenuItem("Open", on_click, default=True),
             pystray.Menu.SEPARATOR,
@@ -256,7 +318,7 @@ def main() -> None:
 
     threading.Thread(target=icon.run, daemon=True).start()
 
-    win.run()  # blocks on tkinter mainloop
+    win.run()
 
 
 if __name__ == "__main__":
