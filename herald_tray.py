@@ -19,7 +19,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, simpledialog
 from pathlib import Path
 
 import httpx
@@ -119,6 +119,7 @@ class HeraldWindow:
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
 
+        self._reconnect = threading.Event()
         self._build_ui()
         self.root.withdraw()
         self.root.after(300, self._poll_messages)
@@ -129,6 +130,14 @@ class HeraldWindow:
         top.pack(fill="x")
 
         tk.Label(top, text="Herald", font=("Segoe UI", 13, "bold")).pack(side="left")
+
+        self.name_label = tk.Label(
+            top, text=self.peer_name,
+            font=("Segoe UI", 9), fg="#555", cursor="hand2",
+        )
+        self.name_label.pack(side="left", padx=(6, 0))
+        self.name_label.bind("<Button-1>", lambda e: self._rename())
+
         self.status_dot = tk.Label(top, text="●", fg="#aaa", font=("Segoe UI", 14))
         self.status_dot.pack(side="right")
         self.status_label = tk.Label(top, text="Connecting…", fg="#888", font=("Segoe UI", 9))
@@ -193,6 +202,24 @@ class HeraldWindow:
         self.cfg["auto_reply"] = self.autoreply_var.get()
         save_config(self.cfg)
 
+    def _rename(self):
+        new_name = simpledialog.askstring(
+            "Rename Machine",
+            "Enter new machine name:",
+            initialvalue=self.peer_name,
+            parent=self.root,
+        )
+        if not new_name or new_name.strip() == self.peer_name:
+            return
+        new_name = new_name.strip()
+        self.cfg["name"] = new_name
+        self.peer_name = new_name
+        save_config(self.cfg)
+        self.name_label.config(text=new_name)
+        self.root.title(f"Herald — {new_name}")
+        # Signal SSE thread to reconnect with new name by setting reconnect flag
+        self._reconnect.set()
+
     def _exit(self):
         self.root.destroy()
         os._exit(0)
@@ -242,26 +269,26 @@ class HeraldWindow:
 # ── SSE background thread ─────────────────────────────────────────────────────
 
 def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
-               project_dir: str) -> None:
+               reconnect: threading.Event, project_dir: str) -> None:
     server_url = cfg["server_url"]
-    peer_name = cfg["name"]
     url = f"{server_url.rstrip('/')}/subscribe"
 
     while running.is_set():
+        reconnect.clear()
+        peer_name = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("name", cfg["name"])
         try:
             with httpx.Client(timeout=None) as client:
                 with client.stream("GET", url, params={"peer": peer_name}) as r:
                     msg_queue.put({"type": "status", "connected": True})
                     for line in r.iter_lines():
-                        if not running.is_set():
-                            return
+                        if not running.is_set() or reconnect.is_set():
+                            break
                         if not line.startswith("data:"):
                             continue
                         payload = json.loads(line[5:].strip())
                         from_peer = payload.get("from_peer", "?")
                         msg_id = payload.get("message_id", "?")
 
-                        # Reload config each time to pick up latest auto_reply setting
                         auto_reply = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("auto_reply", False)
                         if auto_reply:
                             invoke_claude_reply(project_dir)
@@ -275,7 +302,7 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
         except Exception:
             pass
         msg_queue.put({"type": "status", "connected": False})
-        if running.is_set():
+        if running.is_set() and not reconnect.is_set():
             time.sleep(5)
 
 
@@ -298,7 +325,7 @@ def main() -> None:
 
     threading.Thread(
         target=sse_thread,
-        args=(cfg, msg_queue, running, project_dir),
+        args=(cfg, msg_queue, running, win._reconnect, project_dir),
         daemon=True,
     ).start()
 
