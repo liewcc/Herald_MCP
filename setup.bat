@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 title Herald MCP - Setup
 cd /d "%~dp0"
 
@@ -7,6 +8,18 @@ echo  Herald MCP Setup
 echo ============================================
 echo.
 
+echo [0/4] Checking config.json...
+if not exist "%~dp0config.json" (
+    echo   config.json not found. Creating one now.
+    echo.
+    set /p SERVER_URL="  Enter Herald server URL (e.g. http://202.59.9.164:7700): "
+    set /p PEER_NAME="  Enter a name for this machine (e.g. machine-b): "
+    python -c "import json,sys; cfg={'name':sys.argv[1],'server_url':sys.argv[2],'peers':['machine-a']}; open(sys.argv[3],'w',encoding='utf-8').write(json.dumps(cfg,indent=2))" "!PEER_NAME!" "!SERVER_URL!" "%~dp0config.json"
+    echo   [OK] config.json created.
+) else (
+    echo   [OK] config.json found.
+)
+echo.
 echo [1/4] Installing Python dependencies...
 pip install -r requirements.txt
 pip install pystray pillow pywin32
