@@ -7,8 +7,9 @@ echo  Herald MCP Setup
 echo ============================================
 echo.
 
-echo [1/3] Installing Python dependencies...
+echo [1/4] Installing Python dependencies...
 pip install -r requirements.txt
+pip install pystray pillow pywin32
 if %ERRORLEVEL% neq 0 (
     echo.
     echo ERROR: pip install failed.
@@ -18,7 +19,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo [2/3] Registering with Claude Code...
+echo [2/4] Registering with Claude Code...
 where claude >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo   WARNING: claude CLI not found in PATH.
@@ -52,7 +53,7 @@ if %ERRORLEVEL% equ 0 (
 
 :register_antigravity
 echo.
-echo [3/3] Registering with Antigravity...
+echo [3/4] Registering with Antigravity...
 set "AGY_FOUND="
 if exist "%LOCALAPPDATA%\agy\bin\agy.exe"                              set "AGY_FOUND=1"
 if exist "%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe"         set "AGY_FOUND=1"
@@ -103,13 +104,27 @@ if %ERRORLEVEL% equ 0 (
 
 :done
 echo.
+echo [4/4] Installing Herald tray daemon...
+python "%~dp0herald_tray.py" --install
+if %ERRORLEVEL% neq 0 (
+    echo   WARNING: Could not install startup shortcut. Run manually:
+    echo     python "%~dp0herald_tray.py" --install
+) else (
+    echo   [OK] Herald tray will start automatically at logon.
+)
+
+echo.
+echo   Starting Herald tray now...
+start "" pythonw "%~dp0herald_tray.py"
+
+echo.
 echo ============================================
 echo  Setup complete!
 echo.
 echo  Next steps:
-echo  1. Edit config.json — fill in server_url and your machine name.
+echo  1. Edit config.json -- fill in server_url and your machine name.
 echo  2. Restart Claude Code (or Antigravity) to load the herald MCP.
-echo  3. Ask Claude to call list_peers() to confirm Herald is working.
+echo  3. Look for the Herald icon in the system tray (bottom-right).
 echo ============================================
 echo.
 pause
