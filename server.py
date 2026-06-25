@@ -1,5 +1,6 @@
 import fastapi
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Tuple, Optional
 import uvicorn
@@ -28,9 +29,10 @@ port = config.get("port", 7700)
 
 app = FastAPI(title="Herald MCP Long-poll Server")
 
-# In-memory store (two dicts):
+# In-memory store (three dicts):
 pending_messages: dict[str, dict] = {}  # message_id -> {message_id, from_peer, message, attachments, received_at}
 reply_events: dict[str, tuple[asyncio.Event, dict|None]] = {}  # message_id -> (event, reply_data)
+subscribers: dict[str, asyncio.Queue] = {}
 
 class AskBody(BaseModel):
     message_id: str
@@ -75,6 +77,13 @@ async def ask(request: Request, body: AskBody):
     # Background cleanup on disconnect
     disconnect_task = asyncio.create_task(check_disconnect(request, message_id))
     
+    # Notify subscriber if registered
+    if body.to_peer in subscribers:
+        await subscribers[body.to_peer].put({
+            "message_id": message_id,
+            "from_peer": body.from_peer
+        })
+        
     try:
         # Wait for event to be set (timeout=300s via asyncio.wait_for)
         await asyncio.wait_for(event.wait(), timeout=300.0)
@@ -110,6 +119,33 @@ async def reply(message_id: str, body: ReplyBody):
     event.set()
     # Return {"ok": true}
     return {"ok": True}
+
+@app.get("/subscribe")
+async def subscribe(request: Request, peer: str):
+    if not peer:
+        raise HTTPException(status_code=400, detail="Peer name is required")
+    
+    queue = asyncio.Queue()
+    subscribers[peer] = queue
+    
+    async def event_generator():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    # Wait for a message notification or timeout for keepalive
+                    msg = await asyncio.wait_for(queue.get(), timeout=25.0)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if subscribers.get(peer) is queue:
+                subscribers.pop(peer, None)
+                
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.get("/health")
 async def health():

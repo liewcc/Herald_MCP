@@ -61,6 +61,7 @@ if exist "%LOCALAPPDATA%\Programs\Antigravity IDE\Antigravity IDE.exe" set "AGY_
 if not defined AGY_FOUND (
     echo   NOTE: Antigravity not found. If you install it later, add this to:
     echo     %%USERPROFILE%%\.gemini\config\mcp_config.json
+    echo     and %%USERPROFILE%%\.gemini\antigravity\mcp_config.json
     echo.
     echo   {
     echo     "mcpServers": {
@@ -73,7 +74,7 @@ if not defined AGY_FOUND (
     goto :done
 )
 
-python -c "import json,os; p=os.path.expandvars(r'%%USERPROFILE%%/.gemini/config/mcp_config.json'); exit(0 if os.path.exists(p) and 'herald' in json.load(open(p,encoding='utf-8')).get('mcpServers',{}) else 1)" >nul 2>&1
+python -c "import json,os; paths=[os.path.expandvars(r'%%USERPROFILE%%/.gemini/config/mcp_config.json'), os.path.expandvars(r'%%USERPROFILE%%/.gemini/antigravity/mcp_config.json')]; exit(0 if all(os.path.exists(p) and 'herald' in json.load(open(p,encoding='utf-8')).get('mcpServers',{}) for p in paths) else 1)" >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     echo   [OK] herald is already registered with Antigravity.
     goto :done
@@ -85,19 +86,19 @@ if /i not "%REGISTER_AGY%"=="y" (
     goto :done
 )
 
-python -c "import os; f=open(os.path.expandvars(r'%%TEMP%%\herald_mcp_register.py'), 'w', encoding='utf-8'); f.write('import sys, os, json\np = os.path.expandvars(r\'%%USERPROFILE%%/.gemini/config/mcp_config.json\')\nos.makedirs(os.path.dirname(p), exist_ok=True)\nd = {}\nif os.path.exists(p):\n    try:\n        with open(p, encoding=\'utf-8\') as f: d = json.load(f)\n    except: pass\nif \'mcpServers\' not in d: d[\'mcpServers\'] = {}\nd[\'mcpServers\'][\'herald\'] = {\'command\': \'python\', \'args\': [sys.argv[1]]}\nwith open(p, \'w\', encoding=\'utf-8\') as f: json.dump(d, f, indent=2)\n')"
+python -c "import os; f=open(os.path.expandvars(r'%%TEMP%%\herald_mcp_register.py'), 'w', encoding='utf-8'); f.write('import sys, os, json\npaths = [os.path.expandvars(r\'%%USERPROFILE%%/.gemini/config/mcp_config.json\'), os.path.expandvars(r\'%%USERPROFILE%%/.gemini/antigravity/mcp_config.json\')]\nfor p in paths:\n    os.makedirs(os.path.dirname(p), exist_ok=True)\n    d = {}\n    if os.path.exists(p):\n        try:\n            with open(p, encoding=\'utf-8\') as f: d = json.load(f)\n        except: pass\n    if \'mcpServers\' not in d: d[\'mcpServers\'] = {}\n    d[\'mcpServers\'][\'herald\'] = {\'command\': \'python\', \'args\': [sys.argv[1]]}\n    with open(p, \'w\', encoding=\'utf-8\') as f: json.dump(d, f, indent=2)\n')"
 python "%TEMP%\herald_mcp_register.py" "%~dp0mcp_server.py"
 if exist "%TEMP%\herald_mcp_register.py" del "%TEMP%\herald_mcp_register.py"
 if %ERRORLEVEL% neq 0 (
-    echo   WARNING: Could not write config. Check %%USERPROFILE%%\.gemini\config\mcp_config.json
+    echo   WARNING: Could not write config. Check %%USERPROFILE%%\.gemini\config\mcp_config.json and %%USERPROFILE%%\.gemini\antigravity\mcp_config.json
     goto :done
 )
 
-python -c "import json,os; p=os.path.expandvars(r'%%USERPROFILE%%/.gemini/config/mcp_config.json'); exit(0 if os.path.exists(p) and 'herald' in json.load(open(p,encoding='utf-8')).get('mcpServers',{}) else 1)" >nul 2>&1
+python -c "import json,os; paths=[os.path.expandvars(r'%%USERPROFILE%%/.gemini/config/mcp_config.json'), os.path.expandvars(r'%%USERPROFILE%%/.gemini/antigravity/mcp_config.json')]; exit(0 if all(os.path.exists(p) and 'herald' in json.load(open(p,encoding='utf-8')).get('mcpServers',{}) for p in paths) else 1)" >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     echo   [OK] herald registered successfully with Antigravity.
 ) else (
-    echo   WARNING: Could not verify. Check %%USERPROFILE%%\.gemini\config\mcp_config.json
+    echo   WARNING: Could not verify. Check %%USERPROFILE%%\.gemini\config\mcp_config.json and %%USERPROFILE%%\.gemini\antigravity\mcp_config.json
 )
 
 :done
