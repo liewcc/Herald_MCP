@@ -8,6 +8,7 @@ Auto-start setup (run once in PowerShell):
     python herald_tray.py --install
 """
 import json
+import os
 import sys
 import threading
 import time
@@ -18,6 +19,7 @@ import pystray
 from PIL import Image, ImageDraw
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
+STARTUP_LNK = Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Startup/herald_tray.lnk"
 
 
 def load_config() -> dict:
@@ -55,26 +57,37 @@ def sse_loop(icon: pystray.Icon, server_url: str, peer_name: str) -> None:
             time.sleep(5)
 
 
+def is_startup_enabled() -> bool:
+    return STARTUP_LNK.exists()
+
+
 def install_startup() -> None:
-    """Add a Startup folder shortcut so herald_tray runs at logon."""
-    import os, winreg  # noqa: F401 — windows only
+    import win32com.client
     pythonw = Path(sys.executable).parent / "pythonw.exe"
     script = Path(__file__).resolve()
-    startup = Path(os.environ["APPDATA"]) / "Microsoft/Windows/Start Menu/Programs/Startup/herald_tray.lnk"
-
-    import win32com.client  # pywin32
     wsh = win32com.client.Dispatch("WScript.Shell")
-    lnk = wsh.CreateShortcut(str(startup))
+    lnk = wsh.CreateShortcut(str(STARTUP_LNK))
     lnk.TargetPath = str(pythonw)
     lnk.Arguments = f'"{script}"'
     lnk.WorkingDirectory = str(script.parent)
     lnk.Save()
-    print(f"Shortcut created: {startup}")
+
+
+def uninstall_startup() -> None:
+    STARTUP_LNK.unlink(missing_ok=True)
+
+
+def toggle_startup(icon, item) -> None:
+    if is_startup_enabled():
+        uninstall_startup()
+    else:
+        install_startup()
 
 
 def main() -> None:
     if "--install" in sys.argv:
         install_startup()
+        print(f"Shortcut created: {STARTUP_LNK}")
         return
 
     cfg = load_config()
@@ -84,7 +97,13 @@ def main() -> None:
         icon=make_icon(),
         title=f"Herald ({cfg['name']})",
         menu=pystray.Menu(
-            pystray.MenuItem("Exit", lambda: icon.stop())
+            pystray.MenuItem(
+                "Start on Login",
+                toggle_startup,
+                checked=lambda item: is_startup_enabled(),
+            ),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Exit", lambda: icon.stop()),
         ),
     )
     icon._running = True
