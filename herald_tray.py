@@ -85,6 +85,10 @@ def uninstall_startup() -> None:
 # ── Claude auto-reply ─────────────────────────────────────────────────────────
 
 def find_claude_exe() -> str | None:
+    # Native build (~/.local/bin) takes priority over MSIX package
+    native = Path.home() / ".local" / "bin" / "claude.exe"
+    if native.exists():
+        return str(native)
     base = Path(os.environ.get("APPDATA", "")) / "Claude" / "claude-code"
     if base.exists():
         for d in sorted(base.iterdir(), key=lambda p: p.name, reverse=True):
