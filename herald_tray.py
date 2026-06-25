@@ -37,7 +37,7 @@ REPLY_PROMPT = (
     "For each message, process it and call reply with an appropriate response. "
     "When done, exit."
 )
-ALLOWED_TOOLS = "mcp__herald__get_pending,mcp__herald__reply,mcp__herald__send_file,Bash,PowerShell"
+ALLOWED_TOOLS = "mcp__herald__get_pending,mcp__herald__reply,mcp__herald__send_file,mcp__herald__deposit_file,mcp__herald__get_deposits,Bash,PowerShell"
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
