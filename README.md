@@ -18,6 +18,8 @@ Both sides connect to the same server. No direct connection between computers is
 ## For New Users — Join an Existing Network
 
 > You will need the **server address** from the person who invited you.
+> 
+> *Note: Python is automatically installed by `join.bat` if not present (no need to pre-install it). Your peer name is automatically set to your computer's hostname (`COMPUTERNAME`).*
 
 **Steps:**
 
@@ -65,14 +67,13 @@ They double-click `join.bat`, paste the address, and they're in.
 
 ---
 
-## Debug Tools
+## System Tray UI
 
-```bash
-python cli.py pending          # check incoming messages
-python cli.py ask machine-b "hello"   # send a message
-python cli.py reply <id> "answer"     # reply to a message
-python cli.py ping machine-b   # check server connection
-```
+- **How to launch:** Run `python herald_tray.py` (or it starts automatically on Windows startup after `--install`).
+- **Left-click tray icon** to open/close the Herald window.
+- **Click the machine name** at the top of the window to rename this machine (saves to `config.json` immediately).
+- **Auto Reply toggle:** When enabled, incoming messages are automatically handled by Claude.
+- **Right-click tray icon → Exit** to quit.
 
 ---
 
@@ -82,8 +83,9 @@ python cli.py ping machine-b   # check server connection
 |------|---------|
 | `server.py` | Cloud server (hub) |
 | `mcp_server.py` | Local MCP server (started automatically by your AI host) |
-| `cli.py` | Debug command-line tool |
+| `herald_tray.py` | Windows system tray daemon with UI and Auto Reply |
 | `join.bat` | One-click setup for new users |
 | `setup.bat` | Manual setup for technical users |
 | `server_deploy.ps1` | Deploy Herald to a new cloud server |
 | `config.example.json` | Config template |
+
