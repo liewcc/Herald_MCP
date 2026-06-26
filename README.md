@@ -54,6 +54,9 @@ On your Windows cloud server, open PowerShell as Administrator and paste the con
      "peers": ["machine-b"]
    }
    ```
+   Where:
+   - `"name"` (`"machine-a"`): YOUR own computer (the admin's machine) — replace this with your actual computer name.
+   - `"peers"`: The list of machines you want to be able to send messages to. Replace `"machine-b"` with the OTHER person's computer name (they get their name from `join.bat`, which uses their Windows `%COMPUTERNAME%`).
 3. Run `setup.bat`
 4. Restart Claude Code or Antigravity
 
