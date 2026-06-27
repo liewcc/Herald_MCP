@@ -63,9 +63,10 @@ async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = N
         "attachments": attachments,
     }
 
-    # Post with short timeout — relay queues the message even when we disconnect.
-    # The remote peer's claude will push the reply back via ask_peer("cc", ...).
-    async with httpx.AsyncClient(timeout=6.0) as client:
+    # Hold connection for 20s so relay can register the message, then disconnect.
+    # 20s is enough for relay to queue it but short enough to return before the
+    # MCP framework's ~60s tool-call timeout.
+    async with httpx.AsyncClient(timeout=20.0) as client:
         try:
             await client.post(server_url(config, "/ask"), json=payload)
         except httpx.TimeoutException:
