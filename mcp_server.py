@@ -286,5 +286,45 @@ async def save_attachment(message_id: str, save_dir: str) -> dict:
     return {"saved": saved, "count": len(saved)}
 
 
+@mcp.tool()
+async def exec_shell(peer_name: str, cmd: str, timeout: int = 60) -> dict:
+    """Execute a PowerShell command on a remote peer running shell_agent.py.
+
+    Args:
+        peer_name: Target peer name (must be running shell_agent.py).
+        cmd: PowerShell command string to execute.
+        timeout: Seconds to wait for the result (default 60).
+    """
+    try:
+        config = load_config()
+    except Exception as e:
+        return {"error": str(e)}
+
+    payload = {
+        "message_id": str(uuid.uuid4()),
+        "from_peer": config.get("name", "unknown"),
+        "to_peer": peer_name,
+        "message": json.dumps({"type": "shell", "cmd": cmd}),
+        "attachments": [],
+    }
+
+    async with httpx.AsyncClient(timeout=timeout + 5.0) as client:
+        try:
+            r = await client.post(server_url(config, "/ask"), json=payload)
+            if r.status_code != 200:
+                return {"error": f"HTTP {r.status_code}", "detail": r.text}
+            data = r.json()
+            # shell_agent replies with JSON string in "answer"
+            answer = data.get("answer", "")
+            try:
+                return json.loads(answer)
+            except Exception:
+                return {"raw": answer}
+        except httpx.TimeoutException:
+            return {"error": "timeout"}
+        except Exception as e:
+            return {"error": str(e)}
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
