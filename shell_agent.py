@@ -33,6 +33,7 @@ ALLOWED: list[str | re.Pattern] = [
     "systeminfo",
     "tasklist",
     "python ",
+    "git ",
     re.compile(r"^echo\s", re.IGNORECASE),
 ]
 
