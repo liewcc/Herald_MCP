@@ -98,11 +98,17 @@ def find_claude_exe() -> str | None:
     return shutil.which("claude")
 
 
+_claude_proc: subprocess.Popen | None = None
+
 def invoke_claude_reply(project_dir: str) -> None:
+    global _claude_proc
+    # ponytail: single-instance guard — skip if previous claude is still running
+    if _claude_proc is not None and _claude_proc.poll() is None:
+        return
     claude_exe = find_claude_exe()
     if not claude_exe:
         return
-    subprocess.Popen(
+    _claude_proc = subprocess.Popen(
         [claude_exe, "-p", REPLY_PROMPT, "--allowedTools", ALLOWED_TOOLS],
         cwd=project_dir,
         creationflags=subprocess.CREATE_NO_WINDOW,
