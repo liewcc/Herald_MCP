@@ -63,22 +63,26 @@ async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = N
         "attachments": attachments,
     }
 
-    # Hold connection for 20s so relay can register the message, then disconnect.
-    # 20s is enough for relay to queue it but short enough to return before the
-    # MCP framework's ~60s tool-call timeout.
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    # Block and wait for April's claude to reply (typically 20-50s).
+    # 50s keeps us under the MCP framework's tool-call timeout (~60-120s).
+    async with httpx.AsyncClient(timeout=50.0) as client:
         try:
-            await client.post(server_url(config, "/ask"), json=payload)
+            r = await client.post(server_url(config, "/ask"), json=payload)
+            result = r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
+            _log(dir="in", tool="ask_peer", peer=peer_name, preview=str(result)[:300])
+            return result
         except httpx.TimeoutException:
-            pass  # expected: relay queued the message, reply will come via get_pending
+            # Relay held the message long enough — claude may still be processing.
+            # Use get_pending() to retrieve the reply when it arrives.
+            _log(dir="in", tool="ask_peer", peer=peer_name, error="timeout")
+            return {
+                "status": "timeout",
+                "message_id": mid,
+                "note": "Claude may still be processing. Use get_pending() to retrieve reply.",
+            }
         except Exception as e:
+            _log(dir="in", tool="ask_peer", peer=peer_name, error=str(e))
             return {"error": str(e)}
-
-    return {
-        "status": "sent",
-        "message_id": mid,
-        "note": "Use get_pending() in ~30-60s to retrieve the reply.",
-    }
 
 
 @mcp.tool()
