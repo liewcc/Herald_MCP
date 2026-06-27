@@ -6,5 +6,7 @@ __pycache__/
 HANDOFF.md
 *.md
 !README.md
+!CLAUDE.md
+!.agent.md
 herald_tray.log
 received/
