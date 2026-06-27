@@ -569,21 +569,23 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
 
                             # check message type before triggering claude — shell commands
                             # are handled exclusively by shell_agent; invoking claude for
-                            # them burns tokens and causes reply-order races
+                            # them burns tokens and causes reply-order races.
+                            # ponytail: use a separate short-lived client — reusing the SSE
+                            # client for a second request while streaming breaks httpx.
                             is_shell = False
                             try:
-                                r_peek = client.get(
-                                    f"{server_url.rstrip('/')}/pending",
-                                    params={"peer": peer_name},
-                                    timeout=5.0,
-                                )
-                                for m in (r_peek.json() if r_peek.status_code == 200 else []):
-                                    if m.get("message_id") == mid:
-                                        try:
-                                            is_shell = json.loads(m.get("message", "")).get("type") == "shell"
-                                        except Exception:
-                                            pass
-                                        break
+                                with httpx.Client(timeout=5.0) as peek:
+                                    rp = peek.get(
+                                        f"{server_url.rstrip('/')}/pending",
+                                        params={"peer": peer_name},
+                                    )
+                                    for m in (rp.json() if rp.status_code == 200 else []):
+                                        if m.get("message_id") == mid:
+                                            try:
+                                                is_shell = json.loads(m.get("message", "")).get("type") == "shell"
+                                            except Exception:
+                                                pass
+                                            break
                             except Exception:
                                 pass
 
