@@ -54,6 +54,9 @@ def load_config() -> dict:
 
 
 async def run():
+    # ponytail: delay lets network stack settle after boot before first connect attempt
+    await asyncio.sleep(10)
+
     config = load_config()
     relay = config.get("server_url", f"http://localhost:{config.get('port', 7700)}")
     peer = config.get("name", "April")
