@@ -8,5 +8,6 @@ HANDOFF.md
 !README.md
 !CLAUDE.md
 !.agent.md
+!docs/*.md
 herald_tray.log
 received/
