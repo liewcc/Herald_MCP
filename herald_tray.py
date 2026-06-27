@@ -5,6 +5,11 @@ Left-click tray icon  → open/focus the Herald window
 Close window (X)      → minimize back to tray (keeps running)
 Right-click tray icon → Exit
 
+Tabs:
+  Messages    — incoming message/deposit log (SSE events)
+  Comm Log    — full two-way log from herald_comm.log (exec_shell + ask_peer)
+  Remote Tasks — fire exec_shell to a peer and see their running processes
+
 Auto Reply: when enabled, invokes claude.exe once per incoming message (event-driven,
             NOT a timer — zero token cost while idle).
 
@@ -18,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import tkinter as tk
 from tkinter import ttk, simpledialog
 from pathlib import Path
@@ -26,8 +32,9 @@ import httpx
 import pystray
 from PIL import Image, ImageDraw
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
-STARTUP_LNK = (
+CONFIG_PATH    = Path(__file__).parent / "config.json"
+COMM_LOG       = Path(__file__).parent / "herald_comm.log"
+STARTUP_LNK    = (
     Path(os.environ["APPDATA"])
     / "Microsoft/Windows/Start Menu/Programs/Startup/herald_tray.lnk"
 )
@@ -38,6 +45,14 @@ REPLY_PROMPT = (
     "When done, exit."
 )
 ALLOWED_TOOLS = "mcp__herald__get_pending,mcp__herald__reply,mcp__herald__send_file,mcp__herald__deposit_file,mcp__herald__get_deposits,Bash,PowerShell"
+
+# Preset commands for Remote Tasks tab
+TASK_PRESETS = [
+    "tasklist | findstr /i claude",
+    "tasklist | findstr /i python",
+    "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15 | Format-Table Name,Id,CPU -AutoSize",
+    "tasklist",
+]
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -85,7 +100,6 @@ def uninstall_startup() -> None:
 # ── Claude auto-reply ─────────────────────────────────────────────────────────
 
 def find_claude_exe() -> str | None:
-    # Native build (~/.local/bin) takes priority over MSIX package
     native = Path.home() / ".local" / "bin" / "claude.exe"
     if native.exists():
         return str(native)
@@ -99,6 +113,7 @@ def find_claude_exe() -> str | None:
 
 
 _claude_proc: subprocess.Popen | None = None
+
 
 def invoke_claude_reply(project_dir: str) -> None:
     global _claude_proc
@@ -126,11 +141,12 @@ class HeraldWindow:
 
         self.root = tk.Tk()
         self.root.title(f"Herald — {self.peer_name}")
-        self.root.geometry("420x360")
-        self.root.resizable(False, False)
+        self.root.geometry("720x520")
+        self.root.minsize(600, 400)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
 
         self._reconnect = threading.Event()
+        self._log_pos = 0  # byte offset in herald_comm.log
         self._build_ui()
         self.root.withdraw()
         self.root.after(300, self._poll_messages)
@@ -156,26 +172,15 @@ class HeraldWindow:
 
         ttk.Separator(self.root, orient="horizontal").pack(fill="x")
 
-        # ── Message log ──────────────────────────────────────────────────────
-        tk.Label(self.root, text="Incoming Messages", font=("Segoe UI", 9, "bold"),
-                 anchor="w", padx=10).pack(fill="x", pady=(6, 2))
+        # ── Notebook ─────────────────────────────────────────────────────────
+        self.nb = ttk.Notebook(self.root)
+        self.nb.pack(fill="both", expand=True, padx=6, pady=6)
 
-        frame = tk.Frame(self.root, padx=10)
-        frame.pack(fill="both", expand=True)
+        self._build_messages_tab()
+        self._build_commlog_tab()
+        self._build_tasks_tab()
 
-        scrollbar = tk.Scrollbar(frame)
-        scrollbar.pack(side="right", fill="y")
-
-        self.log = tk.Text(
-            frame, height=10, font=("Consolas", 9),
-            state="disabled", wrap="word",
-            yscrollcommand=scrollbar.set,
-            bg="#f8f8f8", relief="flat", bd=0,
-        )
-        self.log.pack(fill="both", expand=True)
-        scrollbar.config(command=self.log.yview)
-
-        ttk.Separator(self.root, orient="horizontal").pack(fill="x", pady=(6, 0))
+        ttk.Separator(self.root, orient="horizontal").pack(fill="x")
 
         # ── Bottom bar ───────────────────────────────────────────────────────
         bottom = tk.Frame(self.root, padx=10, pady=8)
@@ -199,9 +204,274 @@ class HeraldWindow:
 
         tk.Button(
             bottom, text="Exit", command=self._exit,
-            font=("Segoe UI", 9), relief="flat", bd=1,
-            padx=10,
+            font=("Segoe UI", 9), relief="flat", bd=1, padx=10,
         ).pack(side="right")
+
+    # ── Tab 1: Messages ───────────────────────────────────────────────────────
+
+    def _build_messages_tab(self):
+        frame = tk.Frame(self.nb)
+        self.nb.add(frame, text="  Messages  ")
+
+        inner = tk.Frame(frame, padx=8, pady=4)
+        inner.pack(fill="both", expand=True)
+
+        sb = tk.Scrollbar(inner)
+        sb.pack(side="right", fill="y")
+
+        self.msg_log = tk.Text(
+            inner, font=("Consolas", 9), state="disabled", wrap="word",
+            yscrollcommand=sb.set, bg="#f8f8f8", relief="flat", bd=0,
+        )
+        self.msg_log.pack(fill="both", expand=True)
+        sb.config(command=self.msg_log.yview)
+
+        self.msg_log.tag_config("msg",  foreground="#336600")
+        self.msg_log.tag_config("dep",  foreground="#885500")
+        self.msg_log.tag_config("auto", foreground="#888888")
+
+    # ── Tab 2: Comm Log ───────────────────────────────────────────────────────
+
+    def _build_commlog_tab(self):
+        frame = tk.Frame(self.nb)
+        self.nb.add(frame, text="  Comm Log  ")
+
+        toolbar = tk.Frame(frame, padx=8, pady=4)
+        toolbar.pack(fill="x")
+        tk.Label(toolbar, text="Channel:", font=("Segoe UI", 8), fg="#666").pack(side="left")
+        tk.Label(toolbar, text="■ exec_shell", font=("Segoe UI", 8), fg="#0055cc").pack(side="left", padx=(4, 8))
+        tk.Label(toolbar, text="■ ask_peer", font=("Segoe UI", 8), fg="#770099").pack(side="left", padx=(0, 8))
+        tk.Label(toolbar, text="■ SSE msg", font=("Segoe UI", 8), fg="#996600").pack(side="left", padx=(0, 8))
+        tk.Label(toolbar, text="■ error", font=("Segoe UI", 8), fg="#cc0000").pack(side="left")
+        tk.Button(toolbar, text="Clear", font=("Segoe UI", 8), relief="flat", bd=1,
+                  command=self._clear_commlog).pack(side="right")
+
+        inner = tk.Frame(frame, padx=8, pady=4)
+        inner.pack(fill="both", expand=True)
+
+        sb = tk.Scrollbar(inner)
+        sb.pack(side="right", fill="y")
+
+        self.comm_log = tk.Text(
+            inner, font=("Consolas", 9), state="disabled", wrap="none",
+            yscrollcommand=sb.set, bg="#0f0f0f", fg="#cccccc", relief="flat", bd=0,
+        )
+        self.comm_log.pack(fill="both", expand=True)
+        sb.config(command=self.comm_log.yview)
+
+        self.comm_log.tag_config("shell_out", foreground="#44aaff")
+        self.comm_log.tag_config("shell_in",  foreground="#66ccff")
+        self.comm_log.tag_config("claude_out", foreground="#cc88ff")
+        self.comm_log.tag_config("claude_in",  foreground="#dd99ff")
+        self.comm_log.tag_config("msg_in",     foreground="#ffcc44")
+        self.comm_log.tag_config("err",        foreground="#ff4444")
+        self.comm_log.tag_config("ts",         foreground="#666666")
+
+    def _clear_commlog(self):
+        self.comm_log.config(state="normal")
+        self.comm_log.delete("1.0", "end")
+        self.comm_log.config(state="disabled")
+        # reset file position to end so we don't re-read old entries
+        if COMM_LOG.exists():
+            self._log_pos = COMM_LOG.stat().st_size
+
+    # ── Tab 3: Remote Tasks ───────────────────────────────────────────────────
+
+    def _build_tasks_tab(self):
+        frame = tk.Frame(self.nb)
+        self.nb.add(frame, text="  Remote Tasks  ")
+
+        toolbar = tk.Frame(frame, padx=8, pady=6)
+        toolbar.pack(fill="x")
+
+        tk.Label(toolbar, text="Peer:", font=("Segoe UI", 9)).pack(side="left")
+        peers = self.cfg.get("peers", ["April"])
+        self._tasks_peer = tk.StringVar(value=peers[0] if peers else "")
+        peer_cb = ttk.Combobox(toolbar, textvariable=self._tasks_peer,
+                                values=peers, width=12, font=("Segoe UI", 9))
+        peer_cb.pack(side="left", padx=(4, 10))
+
+        tk.Label(toolbar, text="Cmd:", font=("Segoe UI", 9)).pack(side="left")
+        self._tasks_cmd = tk.StringVar(value=TASK_PRESETS[0])
+        cmd_cb = ttk.Combobox(toolbar, textvariable=self._tasks_cmd,
+                               values=TASK_PRESETS, width=48, font=("Consolas", 9))
+        cmd_cb.pack(side="left", padx=(4, 8))
+
+        self._tasks_btn = tk.Button(
+            toolbar, text="Refresh", font=("Segoe UI", 9), relief="flat", bd=1,
+            padx=10, command=self._refresh_tasks,
+        )
+        self._tasks_btn.pack(side="left")
+
+        self._tasks_status = tk.Label(toolbar, text="", font=("Segoe UI", 8), fg="#888")
+        self._tasks_status.pack(side="left", padx=(8, 0))
+
+        inner = tk.Frame(frame, padx=8, pady=4)
+        inner.pack(fill="both", expand=True)
+
+        sb = tk.Scrollbar(inner)
+        sb.pack(side="right", fill="y")
+
+        self.tasks_text = tk.Text(
+            inner, font=("Consolas", 9), state="disabled", wrap="none",
+            yscrollcommand=sb.set, bg="#0f0f0f", fg="#cccccc", relief="flat", bd=0,
+        )
+        self.tasks_text.pack(fill="both", expand=True)
+        sb.config(command=self.tasks_text.yview)
+
+        self.tasks_text.tag_config("claude", foreground="#cc88ff")
+        self.tasks_text.tag_config("python", foreground="#44aaff")
+        self.tasks_text.tag_config("err",    foreground="#ff4444")
+
+    def _refresh_tasks(self):
+        peer = self._tasks_peer.get().strip()
+        cmd  = self._tasks_cmd.get().strip()
+        if not peer or not cmd:
+            return
+        self._tasks_btn.config(state="disabled")
+        self._tasks_status.config(text="Querying…")
+        threading.Thread(target=self._do_refresh_tasks, args=(peer, cmd), daemon=True).start()
+
+    def _do_refresh_tasks(self, peer: str, cmd: str) -> None:
+        try:
+            cfg   = load_config()
+            relay = cfg.get("server_url", f"http://localhost:{cfg.get('port', 7700)}")
+            payload = {
+                "message_id": str(uuid.uuid4()),
+                "from_peer":  cfg.get("name", "unknown"),
+                "to_peer":    peer,
+                "message":    json.dumps({"type": "shell", "cmd": cmd}),
+                "attachments": [],
+            }
+            with httpx.Client(timeout=20.0) as client:
+                r = client.post(f"{relay.rstrip('/')}/ask", json=payload)
+                data   = r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
+                answer = data.get("answer", str(data))
+                try:
+                    result = json.loads(answer)
+                    text = result.get("stdout") or result.get("error") or answer
+                except Exception:
+                    text = answer
+        except Exception as e:
+            text = f"Error: {e}"
+        self.msg_queue.put({"type": "tasks_result", "text": text})
+
+    # ── Polling ───────────────────────────────────────────────────────────────
+
+    def _poll_messages(self):
+        try:
+            while True:
+                event = self.msg_queue.get_nowait()
+                etype = event["type"]
+                if etype == "status":
+                    self.set_status(event["connected"])
+                elif etype in ("message", "deposit"):
+                    self._append_msg_log(event)
+                elif etype == "commlog":
+                    self._append_comm_entry(event["entry"])
+                elif etype == "tasks_result":
+                    self._update_tasks(event["text"])
+        except queue.Empty:
+            pass
+        self._tail_comm_log()
+        self.root.after(300, self._poll_messages)
+
+    def _tail_comm_log(self):
+        if not COMM_LOG.exists():
+            return
+        try:
+            with COMM_LOG.open("r", encoding="utf-8") as f:
+                f.seek(self._log_pos)
+                new_data = f.read()
+                self._log_pos = f.tell()
+            for line in new_data.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    self._append_comm_entry(entry)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # ── Rendering helpers ─────────────────────────────────────────────────────
+
+    def _append_msg_log(self, event: dict):
+        ts = time.strftime("%H:%M:%S")
+        from_peer = event.get("from_peer", "?")
+        mid       = event.get("message_id", "?")
+        if event["type"] == "deposit":
+            line = f"[{ts}] deposit from {from_peer}  ID:{mid[:8]}…\n"
+            tag  = "dep"
+        else:
+            auto   = event.get("auto_replied", False)
+            suffix = "  → auto-replied" if auto else ""
+            line   = f"[{ts}] from {from_peer}  ID:{mid[:8]}…{suffix}\n"
+            tag    = "msg"
+        self.msg_log.config(state="normal")
+        self.msg_log.insert("end", line, tag)
+        self.msg_log.see("end")
+        self.msg_log.config(state="disabled")
+
+    def _append_comm_entry(self, entry: dict):
+        tool = entry.get("tool", "")
+        direction = entry.get("dir", "")
+        ts   = entry.get("ts", "?")
+        peer = entry.get("peer") or entry.get("from") or entry.get("to") or "?"
+
+        # determine display text and color tag
+        if tool == "exec_shell":
+            if direction == "out":
+                cmd  = entry.get("cmd", "")
+                text = f"[{ts}] → exec_shell → {peer}: {cmd}\n"
+                tag  = "shell_out"
+            else:
+                rc      = entry.get("rc", "?")
+                preview = (entry.get("preview") or entry.get("error") or "")[:120]
+                error   = entry.get("error")
+                text    = f"[{ts}] ← {peer} rc={rc}: {preview}\n"
+                tag     = "err" if error else "shell_in"
+        elif tool == "ask_peer":
+            if direction == "out":
+                msg  = entry.get("msg", "")[:100]
+                text = f"[{ts}] → ask_peer → {peer}: {msg}\n"
+                tag  = "claude_out"
+            else:
+                preview = (entry.get("preview") or entry.get("error") or "")[:120]
+                error   = entry.get("error")
+                text    = f"[{ts}] ← {peer}: {preview}\n"
+                tag     = "err" if error else "claude_in"
+        elif tool == "message":
+            mid  = entry.get("mid", "?")
+            text = f"[{ts}] ← [SSE msg] {peer}  ID:{mid[:8]}…\n"
+            tag  = "msg_in"
+        else:
+            # other entries (exec, reply, blocked from shell_agent.log)
+            text = f"[{ts}] {json.dumps(entry)}\n"
+            tag  = "ts"
+
+        self.comm_log.config(state="normal")
+        self.comm_log.insert("end", text, tag)
+        self.comm_log.see("end")
+        self.comm_log.config(state="disabled")
+
+    def _update_tasks(self, text: str):
+        self._tasks_btn.config(state="normal")
+        self._tasks_status.config(text=f"Updated {time.strftime('%H:%M:%S')}")
+        self.tasks_text.config(state="normal")
+        self.tasks_text.delete("1.0", "end")
+        for line in text.splitlines():
+            if any(k in line.lower() for k in ("claude", "claude.exe")):
+                self.tasks_text.insert("end", line + "\n", "claude")
+            elif "python" in line.lower():
+                self.tasks_text.insert("end", line + "\n", "python")
+            else:
+                self.tasks_text.insert("end", line + "\n")
+        self.tasks_text.config(state="disabled")
+
+    # ── Controls ──────────────────────────────────────────────────────────────
 
     def _toggle_startup(self):
         if self.startup_var.get():
@@ -228,7 +498,6 @@ class HeraldWindow:
         save_config(self.cfg)
         self.name_label.config(text=new_name)
         self.root.title(f"Herald — {new_name}")
-        # Signal SSE thread to reconnect with new name by setting reconnect flag
         self._reconnect.set()
 
     def _exit(self):
@@ -251,38 +520,18 @@ class HeraldWindow:
             self.status_dot.config(fg="#cc3333")
             self.status_label.config(text="Disconnected")
 
-    def append_message(self, from_peer: str, msg_id: str, auto_replied: bool = False, event_type: str = "message"):
-        ts = time.strftime("%H:%M:%S")
-        if event_type == "deposit":
-            line = f"[{ts}] deposit from {from_peer}  |  ID: {msg_id[:8]}…\n"
-        else:
-            suffix = "  → auto-replied" if auto_replied else ""
-            line = f"[{ts}] from {from_peer}  |  ID: {msg_id[:8]}…{suffix}\n"
-        self.log.config(state="normal")
-        self.log.insert("end", line)
-        self.log.see("end")
-        self.log.config(state="disabled")
-
-    def _poll_messages(self):
-        try:
-            while True:
-                event = self.msg_queue.get_nowait()
-                if event["type"] == "status":
-                    self.set_status(event["connected"])
-                elif event["type"] in ("message", "deposit"):
-                    self.append_message(
-                        event["from_peer"], event["message_id"],
-                        event.get("auto_replied", False), event["type"]
-                    )
-        except queue.Empty:
-            pass
-        self.root.after(300, self._poll_messages)
-
     def run(self):
         self.root.mainloop()
 
 
 # ── SSE background thread ─────────────────────────────────────────────────────
+
+def _comm_log_write(entry: dict) -> None:
+    import datetime
+    entry.setdefault("ts", datetime.datetime.now().strftime("%H:%M:%S"))
+    with COMM_LOG.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
 
 def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
                reconnect: threading.Event, project_dir: str) -> None:
@@ -303,24 +552,50 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
                             continue
                         payload = json.loads(line[5:].strip())
                         event_type = payload.get("type", "message")
-                        from_peer = payload.get("from_peer", "?")
+                        from_peer  = payload.get("from_peer", "?")
 
                         if event_type == "deposit":
+                            mid = payload.get("deposit_id", "?")
                             msg_queue.put({
                                 "type": "deposit",
                                 "from_peer": from_peer,
-                                "message_id": payload.get("deposit_id", "?"),
+                                "message_id": mid,
                             })
                         else:
-                            msg_id = payload.get("message_id", "?")
+                            mid = payload.get("message_id", "?")
+                            _comm_log_write({"dir": "in", "tool": "message", "from": from_peer, "mid": mid})
+
+                            # check message type before triggering claude — shell commands
+                            # are handled exclusively by shell_agent; invoking claude for
+                            # them burns tokens and causes reply-order races
+                            is_shell = False
+                            try:
+                                r_peek = client.get(
+                                    f"{server_url.rstrip('/')}/pending",
+                                    params={"peer": peer_name},
+                                    timeout=5.0,
+                                )
+                                for m in (r_peek.json() if r_peek.status_code == 200 else []):
+                                    if m.get("message_id") == mid:
+                                        try:
+                                            is_shell = json.loads(m.get("message", "")).get("type") == "shell"
+                                        except Exception:
+                                            pass
+                                        break
+                            except Exception:
+                                pass
+
                             auto_reply = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("auto_reply", False)
-                            if auto_reply:
+                            triggered = False
+                            if auto_reply and not is_shell:
                                 invoke_claude_reply(project_dir)
+                                triggered = True
+
                             msg_queue.put({
                                 "type": "message",
                                 "from_peer": from_peer,
-                                "message_id": msg_id,
-                                "auto_replied": auto_reply,
+                                "message_id": mid,
+                                "auto_replied": triggered,
                             })
         except Exception:
             pass

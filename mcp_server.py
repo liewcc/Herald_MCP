@@ -1,4 +1,5 @@
 import base64
+import datetime
 import json
 import mimetypes
 import time
@@ -10,16 +11,26 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("Herald")
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
+CONFIG_PATH  = Path(__file__).parent / "config.json"
+COMM_LOG     = Path(__file__).parent / "herald_comm.log"
+
 
 def load_config() -> dict:
     if not CONFIG_PATH.exists():
         raise FileNotFoundError("config.json not found")
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
+
 def server_url(config: dict, path: str) -> str:
     base = config.get("server_url", f"http://localhost:{config.get('port', 7700)}")
     return base.rstrip("/") + path
+
+
+def _log(**kwargs) -> None:
+    entry = {"ts": datetime.datetime.now().strftime("%H:%M:%S"), **kwargs}
+    with COMM_LOG.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
 
 @mcp.tool()
 async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = None) -> dict:
@@ -30,6 +41,8 @@ async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = N
         config = load_config()
     except Exception as e:
         return {"error": str(e)}
+
+    _log(dir="out", tool="ask_peer", peer=peer_name, msg=message[:120])
 
     payload = {
         "message_id": str(uuid.uuid4()),
@@ -42,11 +55,16 @@ async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = N
     async with httpx.AsyncClient(timeout=305.0) as client:
         try:
             r = await client.post(server_url(config, "/ask"), json=payload)
-            return r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}", "detail": r.text}
+            result = r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}", "detail": r.text}
+            _log(dir="in", tool="ask_peer", peer=peer_name, preview=str(result)[:300])
+            return result
         except httpx.TimeoutException:
+            _log(dir="in", tool="ask_peer", peer=peer_name, error="timeout")
             return {"error": "timeout"}
         except Exception as e:
+            _log(dir="in", tool="ask_peer", peer=peer_name, error=str(e))
             return {"error": "connection_error", "detail": str(e)}
+
 
 @mcp.tool()
 async def get_pending() -> list:
@@ -63,6 +81,7 @@ async def get_pending() -> list:
             return r.json() if r.status_code == 200 else [{"error": f"HTTP {r.status_code}"}]
         except Exception as e:
             return [{"error": str(e)}]
+
 
 @mcp.tool()
 async def reply(message_id: str, answer: str, attachments: Optional[list] = None) -> dict:
@@ -81,6 +100,7 @@ async def reply(message_id: str, answer: str, attachments: Optional[list] = None
             return r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
         except Exception as e:
             return {"error": str(e)}
+
 
 @mcp.tool()
 async def list_peers() -> dict:
@@ -104,6 +124,7 @@ async def list_peers() -> dict:
         "peers": peers,
     }
 
+
 @mcp.tool()
 async def ping_peer(peer_name: str) -> dict:
     """Check if the Herald server is reachable (peer_name ignored in hub mode)."""
@@ -120,6 +141,7 @@ async def ping_peer(peer_name: str) -> dict:
             return {"online": r.status_code == 200, "latency_ms": ms}
         except Exception as e:
             return {"online": False, "error": str(e)}
+
 
 @mcp.tool()
 async def send_file(peer_name: str, file_path: str, message: str = "") -> dict:
@@ -300,6 +322,8 @@ async def exec_shell(peer_name: str, cmd: str, timeout: int = 60) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
+    _log(dir="out", tool="exec_shell", peer=peer_name, cmd=cmd)
+
     payload = {
         "message_id": str(uuid.uuid4()),
         "from_peer": config.get("name", "unknown"),
@@ -312,17 +336,22 @@ async def exec_shell(peer_name: str, cmd: str, timeout: int = 60) -> dict:
         try:
             r = await client.post(server_url(config, "/ask"), json=payload)
             if r.status_code != 200:
+                _log(dir="in", tool="exec_shell", peer=peer_name, error=f"HTTP {r.status_code}")
                 return {"error": f"HTTP {r.status_code}", "detail": r.text}
             data = r.json()
-            # shell_agent replies with JSON string in "answer"
             answer = data.get("answer", "")
             try:
-                return json.loads(answer)
+                result = json.loads(answer)
             except Exception:
-                return {"raw": answer}
+                result = {"raw": answer}
+            _log(dir="in", tool="exec_shell", peer=peer_name,
+                 rc=result.get("returncode"), preview=(result.get("stdout") or result.get("error") or answer)[:300])
+            return result
         except httpx.TimeoutException:
+            _log(dir="in", tool="exec_shell", peer=peer_name, error="timeout")
             return {"error": "timeout"}
         except Exception as e:
+            _log(dir="in", tool="exec_shell", peer=peer_name, error=str(e))
             return {"error": str(e)}
 
 

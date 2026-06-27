@@ -1,0 +1,17 @@
+[
+  {"type": "prefix", "value": "Get-"},
+  {"type": "prefix", "value": "dir "},
+  {"type": "prefix", "value": "dir"},
+  {"type": "prefix", "value": "ls"},
+  {"type": "prefix", "value": "pwd"},
+  {"type": "prefix", "value": "whoami"},
+  {"type": "prefix", "value": "hostname"},
+  {"type": "prefix", "value": "ipconfig"},
+  {"type": "prefix", "value": "systeminfo"},
+  {"type": "prefix", "value": "tasklist"},
+  {"type": "prefix", "value": "python "},
+  {"type": "prefix", "value": "git "},
+  {"type": "prefix", "value": "schtasks "},
+  {"type": "prefix", "value": "claude"},
+  {"type": "regex",  "value": "^echo\\s"}
+]

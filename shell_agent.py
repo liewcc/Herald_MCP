@@ -8,6 +8,7 @@ Listens on the Herald relay SSE stream. When a message arrives with
 {"stdout": "...", "stderr": "...", "returncode": N}.
 
 Non-shell messages are ignored (left in pending for Claude CLI to handle).
+Allowlist is loaded from allowlist.json in the same directory.
 """
 import asyncio
 import json
@@ -17,32 +18,25 @@ from pathlib import Path
 
 import httpx
 
-CONFIG_PATH = Path(__file__).parent / "config.json"
-
-# Allowlist: plain strings for exact prefix match, re.Pattern for regex.
-# Add entries here to permit new command families.
-ALLOWED: list[str | re.Pattern] = [
-    "Get-",          # all Get-* cmdlets (read-only by convention)
-    "dir ",
-    "dir",
-    "ls",
-    "pwd",
-    "whoami",
-    "hostname",
-    "ipconfig",
-    "systeminfo",
-    "tasklist",
-    "python ",
-    "git ",
-    "schtasks ",
-    "claude",
-    re.compile(r"^echo\s", re.IGNORECASE),
-]
+CONFIG_PATH    = Path(__file__).parent / "config.json"
+ALLOWLIST_PATH = Path(__file__).parent / "allowlist.json"
+SHELL_LOG_PATH = Path(__file__).parent / "shell_agent.log"
 
 
-def is_allowed(cmd: str) -> bool:
+def load_allowlist() -> list[str | re.Pattern]:
+    rules = json.loads(ALLOWLIST_PATH.read_text(encoding="utf-8"))
+    result: list[str | re.Pattern] = []
+    for r in rules:
+        if r["type"] == "regex":
+            result.append(re.compile(r["value"], re.IGNORECASE))
+        else:
+            result.append(r["value"])
+    return result
+
+
+def is_allowed(cmd: str, allowed: list[str | re.Pattern]) -> bool:
     stripped = cmd.strip()
-    for rule in ALLOWED:
+    for rule in allowed:
         if isinstance(rule, re.Pattern):
             if rule.match(stripped):
                 return True
@@ -55,13 +49,21 @@ def load_config() -> dict:
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 
 
+def _log(entry: dict) -> None:
+    import datetime
+    entry.setdefault("ts", datetime.datetime.now().strftime("%H:%M:%S"))
+    with SHELL_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
 async def run():
     # ponytail: delay lets network stack settle after boot before first connect attempt
     await asyncio.sleep(10)
 
-    config = load_config()
-    relay = config.get("server_url", f"http://localhost:{config.get('port', 7700)}")
-    peer = config.get("name", "April")
+    config  = load_config()
+    allowed = load_allowlist()
+    relay   = config.get("server_url", f"http://localhost:{config.get('port', 7700)}")
+    peer    = config.get("name", "April")
 
     print(f"shell_agent: connecting as '{peer}' to {relay}", flush=True)
 
@@ -97,33 +99,40 @@ async def run():
                         if body.get("type") != "shell":
                             continue
 
-                        cmd = body.get("cmd", "")
+                        cmd      = body.get("cmd", "")
                         timeout_s = int(body.get("timeout", 60))
+                        from_peer = msg.get("from_peer", "?")
 
-                        if not is_allowed(cmd):
+                        if not is_allowed(cmd, allowed):
                             answer = json.dumps({"error": f"command not in allowlist: {cmd!r}", "returncode": -1})
                             await client.post(f"{relay}/reply/{mid}", json={"answer": answer})
+                            _log({"dir": "blocked", "from": from_peer, "cmd": cmd})
                             print(f"shell_agent: blocked: {cmd!r}", flush=True)
                             continue
 
                         print(f"shell_agent: executing: {cmd!r}", flush=True)
+                        _log({"dir": "exec", "from": from_peer, "cmd": cmd})
 
                         try:
                             proc = subprocess.run(
                                 ["powershell", "-NoProfile", "-Command", cmd],
                                 capture_output=True, text=True, timeout=timeout_s,
                             )
-                            answer = json.dumps({
+                            result = {
                                 "stdout": proc.stdout,
                                 "stderr": proc.stderr,
                                 "returncode": proc.returncode,
-                            })
+                            }
+                            answer = json.dumps(result)
                         except subprocess.TimeoutExpired:
-                            answer = json.dumps({"error": "command timed out", "returncode": -1})
+                            result = {"error": "command timed out", "returncode": -1}
+                            answer = json.dumps(result)
                         except Exception as e:
-                            answer = json.dumps({"error": str(e), "returncode": -1})
+                            result = {"error": str(e), "returncode": -1}
+                            answer = json.dumps(result)
 
                         await client.post(f"{relay}/reply/{mid}", json={"answer": answer})
+                        _log({"dir": "reply", "to": from_peer, "rc": result.get("returncode"), "preview": answer[:200]})
                         print(f"shell_agent: replied to {mid}", flush=True)
 
         except Exception as e:
