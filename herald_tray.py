@@ -40,13 +40,11 @@ STARTUP_LNK    = (
 )
 
 REPLY_PROMPT = (
-    "Use herald MCP tools. Call get_pending to see incoming messages. "
-    "For each message where the message body is NOT a JSON object with type='shell': "
-    "read the from_peer field, then call ask_peer(peer_name=<from_peer>, message=<your response>). "
-    "Do NOT call reply() — the original connection is gone. "
-    "Ignore shell-type messages. When done, exit."
+    "Use herald MCP tools. Call get_pending to retrieve incoming messages. "
+    "For each message, call reply(message_id=<id>, answer=<your response>). "
+    "When done, exit."
 )
-ALLOWED_TOOLS = "mcp__herald__get_pending,mcp__herald__ask_peer"
+ALLOWED_TOOLS = "mcp__herald__get_pending,mcp__herald__reply"
 
 # Preset commands for Remote Tasks tab
 TASK_PRESETS = [
