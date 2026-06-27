@@ -32,7 +32,42 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo [2/4] Registering with Claude Code...
+echo [1b/4] Installing windows-mcp (Claude Desktop remote control)...
+pip show windows-mcp >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    echo   [OK] windows-mcp already installed.
+) else (
+    pip install windows-mcp
+    if %ERRORLEVEL% neq 0 (
+        echo   WARNING: windows-mcp install failed. Desktop automation will not work.
+        echo   Install manually later: pip install windows-mcp
+    ) else (
+        echo   [OK] windows-mcp installed.
+    )
+)
+
+echo.
+echo        Adding windows-mcp to .mcp.json...
+python -c "
+import json, os, sys
+mcp_path = os.path.join(os.path.dirname(os.path.abspath(sys.argv[1])), '.mcp.json')
+d = {}
+if os.path.exists(mcp_path):
+    try:
+        with open(mcp_path, encoding='utf-8') as f: d = json.load(f)
+    except: pass
+if 'mcpServers' not in d: d['mcpServers'] = {}
+python_exe = sys.executable
+if d['mcpServers'].get('windows-mcp'):
+    print('  [OK] windows-mcp already in .mcp.json.')
+else:
+    d['mcpServers']['windows-mcp'] = {'command': python_exe, 'args': ['-m', 'windows_mcp', 'serve']}
+    with open(mcp_path, 'w', encoding='utf-8') as f: json.dump(d, f, indent=4)
+    print('  [OK] windows-mcp added to .mcp.json.')
+" "%~dp0mcp_server.py"
+
+echo.
+echo [2/5] Registering with Claude Code...
 where claude >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo   WARNING: claude CLI not found in PATH.
@@ -66,7 +101,7 @@ if %ERRORLEVEL% equ 0 (
 
 :register_antigravity
 echo.
-echo [3/4] Registering with Antigravity...
+echo [3/5] Registering with Antigravity...
 set "AGY_FOUND="
 if exist "%LOCALAPPDATA%\agy\bin\agy.exe"                              set "AGY_FOUND=1"
 if exist "%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe"         set "AGY_FOUND=1"
@@ -117,7 +152,7 @@ if %ERRORLEVEL% equ 0 (
 
 :done
 echo.
-echo [4/4] Installing Herald tray daemon...
+echo [4/5] Installing Herald tray daemon...
 python "%~dp0herald_tray.py" --install
 if %ERRORLEVEL% neq 0 (
     echo   WARNING: Could not install startup shortcut. Run manually:
