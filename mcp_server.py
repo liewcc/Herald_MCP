@@ -34,7 +34,17 @@ def _log(**kwargs) -> None:
 
 @mcp.tool()
 async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = None) -> dict:
-    """Send a question to a named peer's Claude and wait for its reply."""
+    """Send a message to a named peer's Claude. Returns immediately — does not block.
+
+    The relay queues the message even after this call returns. The remote peer's
+    auto_reply will process it and push a reply to this machine's pending inbox.
+    Use get_pending() after ~30-60s to retrieve the reply.
+
+    Args:
+        peer_name: Target peer name.
+        message: Message text to send.
+        attachments: Optional list of attachments.
+    """
     if attachments is None:
         attachments = []
     try:
@@ -42,28 +52,32 @@ async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = N
     except Exception as e:
         return {"error": str(e)}
 
-    _log(dir="out", tool="ask_peer", peer=peer_name, msg=message[:120])
+    mid = str(uuid.uuid4())
+    _log(dir="out", tool="ask_peer", peer=peer_name, msg=message[:120], message_id=mid)
 
     payload = {
-        "message_id": str(uuid.uuid4()),
+        "message_id": mid,
         "from_peer": config.get("name", "unknown"),
         "to_peer": peer_name,
         "message": message,
         "attachments": attachments,
     }
 
-    async with httpx.AsyncClient(timeout=305.0) as client:
+    # Post with short timeout — relay queues the message even when we disconnect.
+    # The remote peer's claude will push the reply back via ask_peer("cc", ...).
+    async with httpx.AsyncClient(timeout=6.0) as client:
         try:
-            r = await client.post(server_url(config, "/ask"), json=payload)
-            result = r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}", "detail": r.text}
-            _log(dir="in", tool="ask_peer", peer=peer_name, preview=str(result)[:300])
-            return result
+            await client.post(server_url(config, "/ask"), json=payload)
         except httpx.TimeoutException:
-            _log(dir="in", tool="ask_peer", peer=peer_name, error="timeout")
-            return {"error": "timeout"}
+            pass  # expected: relay queued the message, reply will come via get_pending
         except Exception as e:
-            _log(dir="in", tool="ask_peer", peer=peer_name, error=str(e))
-            return {"error": "connection_error", "detail": str(e)}
+            return {"error": str(e)}
+
+    return {
+        "status": "sent",
+        "message_id": mid,
+        "note": "Use get_pending() in ~30-60s to retrieve the reply.",
+    }
 
 
 @mcp.tool()
