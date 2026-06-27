@@ -34,6 +34,7 @@ ALLOWED: list[str | re.Pattern] = [
     "tasklist",
     "python ",
     "git ",
+    "schtasks ",
     re.compile(r"^echo\s", re.IGNORECASE),
 ]
 
