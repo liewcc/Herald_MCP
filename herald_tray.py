@@ -535,10 +535,72 @@ def _comm_log_write(entry: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
+def _load_allowlist() -> list:
+    """Load shell command allowlist from allowlist.json."""
+    p = Path(__file__).parent / "allowlist.json"
+    import re
+    rules = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+    result = []
+    for r in rules:
+        if r.get("type") == "regex":
+            result.append(re.compile(r["value"], re.IGNORECASE))
+        else:
+            result.append(r["value"])
+    return result
+
+
+def _shell_allowed(cmd: str, allowlist: list) -> bool:
+    import re
+    s = cmd.strip()
+    for rule in allowlist:
+        if isinstance(rule, re.Pattern):
+            if rule.match(s):
+                return True
+        elif s.startswith(rule):
+            return True
+    return False
+
+
+def _handle_shell(mid: str, cmd: str, timeout_s: int, from_peer: str,
+                  relay: str, allowlist: list) -> None:
+    """Execute a shell command and post the reply — runs in a daemon thread."""
+    if not _shell_allowed(cmd, allowlist):
+        answer = json.dumps({"error": f"command not in allowlist: {cmd!r}", "returncode": -1})
+        _comm_log_write({"dir": "blocked", "from": from_peer, "cmd": cmd})
+    else:
+        _comm_log_write({"dir": "exec", "from": from_peer, "cmd": cmd})
+        try:
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", cmd],
+                capture_output=True, text=True, timeout=timeout_s,
+            )
+            result = {"stdout": proc.stdout, "stderr": proc.stderr, "returncode": proc.returncode}
+        except subprocess.TimeoutExpired:
+            result = {"error": "command timed out", "returncode": -1}
+        except Exception as e:
+            result = {"error": str(e), "returncode": -1}
+        answer = json.dumps(result)
+        _comm_log_write({"dir": "reply", "to": from_peer,
+                         "rc": result.get("returncode"), "preview": answer[:200]})
+
+    try:
+        with httpx.Client(timeout=10.0) as c:
+            c.post(f"{relay.rstrip('/')}/reply/{mid}", json={"answer": answer})
+    except Exception:
+        pass
+
+
 def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
                reconnect: threading.Event, project_dir: str) -> None:
+    """Single SSE subscriber — handles both shell commands and chat auto-reply.
+
+    Merging shell_agent logic here ensures only one subscriber per peer,
+    avoiding relay work-queue delivery misses when two processes both subscribe.
+    """
     server_url = cfg["server_url"]
-    url = f"{server_url.rstrip('/')}/subscribe"
+    relay      = server_url.rstrip("/")
+    url        = f"{relay}/subscribe"
+    allowlist  = _load_allowlist()
 
     while running.is_set():
         reconnect.clear()
@@ -563,38 +625,59 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
                                 "from_peer": from_peer,
                                 "message_id": mid,
                             })
-                        else:
-                            mid = payload.get("message_id", "?")
-                            _comm_log_write({"dir": "in", "tool": "message", "from": from_peer, "mid": mid})
+                            continue
 
-                            # check message type before triggering claude — shell commands
-                            # are handled exclusively by shell_agent; invoking claude for
-                            # them burns tokens and causes reply-order races.
-                            # ponytail: use a separate short-lived client — reusing the SSE
-                            # client for a second request while streaming breaks httpx.
-                            is_shell = False
+                        mid = payload.get("message_id", "?")
+
+                        # fetch full message body via a separate client
+                        # (never reuse the SSE streaming client for other requests)
+                        msg_body = None
+                        try:
+                            with httpx.Client(timeout=5.0) as peek:
+                                rp = peek.get(f"{relay}/pending", params={"peer": peer_name})
+                                for m in (rp.json() if rp.status_code == 200 else []):
+                                    if m.get("message_id") == mid:
+                                        msg_body = m
+                                        break
+                        except Exception:
+                            pass
+
+                        # parse body to determine routing
+                        shell_body = None
+                        if msg_body:
                             try:
-                                with httpx.Client(timeout=5.0) as peek:
-                                    rp = peek.get(
-                                        f"{server_url.rstrip('/')}/pending",
-                                        params={"peer": peer_name},
-                                    )
-                                    for m in (rp.json() if rp.status_code == 200 else []):
-                                        if m.get("message_id") == mid:
-                                            try:
-                                                is_shell = json.loads(m.get("message", "")).get("type") == "shell"
-                                            except Exception:
-                                                pass
-                                            break
+                                parsed = json.loads(msg_body.get("message", ""))
+                                if parsed.get("type") == "shell":
+                                    shell_body = parsed
                             except Exception:
                                 pass
 
+                        if shell_body:
+                            # shell command — execute and reply directly, no claude
+                            _comm_log_write({"dir": "in", "tool": "exec_shell",
+                                             "from": from_peer, "cmd": shell_body.get("cmd", "")})
+                            threading.Thread(
+                                target=_handle_shell,
+                                args=(mid, shell_body.get("cmd", ""),
+                                      int(shell_body.get("timeout", 60)),
+                                      from_peer, relay, allowlist),
+                                daemon=True,
+                            ).start()
+                            msg_queue.put({
+                                "type": "message",
+                                "from_peer": from_peer,
+                                "message_id": mid,
+                                "auto_replied": False,
+                            })
+                        else:
+                            # chat message — optionally trigger claude auto-reply
+                            _comm_log_write({"dir": "in", "tool": "message",
+                                             "from": from_peer, "mid": mid})
                             auto_reply = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("auto_reply", False)
                             triggered = False
-                            if auto_reply and not is_shell:
+                            if auto_reply:
                                 invoke_claude_reply(project_dir)
                                 triggered = True
-
                             msg_queue.put({
                                 "type": "message",
                                 "from_peer": from_peer,
