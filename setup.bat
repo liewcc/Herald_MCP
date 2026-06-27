@@ -166,6 +166,25 @@ echo   Starting Herald tray now...
 for /f "delims=" %%p in ('python -c "import sys,os; print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))"') do start "" "%%p" "%~dp0herald_tray.py"
 
 echo.
+echo [5/5] Installing shell_agent as a scheduled task (runs at system startup)...
+for /f "delims=" %%p in ('python -c "import sys,os; print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))"') do set "PYTHONW=%%p"
+schtasks /query /tn "HeraldShellAgent" >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    echo   [OK] HeraldShellAgent task already exists.
+) else (
+    schtasks /create /tn "HeraldShellAgent" /tr "\"%PYTHONW%\" \"%~dp0shell_agent.py\"" /sc ONSTART /ru SYSTEM /f >nul 2>&1
+    if %ERRORLEVEL% equ 0 (
+        echo   [OK] HeraldShellAgent scheduled task created (runs at system startup).
+    ) else (
+        echo   WARNING: Could not create scheduled task (requires admin rights).
+        echo   Run setup.bat as Administrator, or create it manually:
+        echo     schtasks /create /tn "HeraldShellAgent" /tr "\"pythonw.exe\" \"%~dp0shell_agent.py\"" /sc ONSTART /ru SYSTEM /f
+    )
+)
+echo   Starting shell_agent now...
+start "" "%PYTHONW%" "%~dp0shell_agent.py"
+
+echo.
 echo ============================================
 echo  Setup complete!
 echo.
