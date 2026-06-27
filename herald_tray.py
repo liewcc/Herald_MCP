@@ -614,7 +614,10 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
                             break
                         if not line.startswith("data:"):
                             continue
-                        payload = json.loads(line[5:].strip())
+                        try:
+                            payload = json.loads(line[5:].strip())
+                        except Exception:
+                            continue
                         event_type = payload.get("type", "message")
                         from_peer  = payload.get("from_peer", "?")
 
@@ -629,61 +632,70 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
 
                         mid = payload.get("message_id", "?")
 
-                        # fetch full message body via a separate client
-                        # (never reuse the SSE streaming client for other requests)
-                        msg_body = None
                         try:
-                            with httpx.Client(timeout=5.0) as peek:
-                                rp = peek.get(f"{relay}/pending", params={"peer": peer_name})
-                                for m in (rp.json() if rp.status_code == 200 else []):
-                                    if m.get("message_id") == mid:
-                                        msg_body = m
-                                        break
-                        except Exception:
-                            pass
-
-                        # parse body to determine routing
-                        shell_body = None
-                        if msg_body:
+                            # fetch full message body via a separate client
+                            # (never reuse the SSE streaming client for other requests)
+                            msg_body = None
                             try:
-                                parsed = json.loads(msg_body.get("message", ""))
-                                if parsed.get("type") == "shell":
-                                    shell_body = parsed
+                                with httpx.Client(timeout=5.0) as peek:
+                                    rp = peek.get(f"{relay}/pending", params={"peer": peer_name})
+                                    for m in (rp.json() if rp.status_code == 200 else []):
+                                        if m.get("message_id") == mid:
+                                            msg_body = m
+                                            break
                             except Exception:
                                 pass
 
-                        if shell_body:
-                            # shell command — execute and reply directly, no claude
-                            _comm_log_write({"dir": "in", "tool": "exec_shell",
-                                             "from": from_peer, "cmd": shell_body.get("cmd", "")})
-                            threading.Thread(
-                                target=_handle_shell,
-                                args=(mid, shell_body.get("cmd", ""),
-                                      int(shell_body.get("timeout", 60)),
-                                      from_peer, relay, allowlist),
-                                daemon=True,
-                            ).start()
-                            msg_queue.put({
-                                "type": "message",
-                                "from_peer": from_peer,
-                                "message_id": mid,
-                                "auto_replied": False,
-                            })
-                        else:
-                            # chat message — optionally trigger claude auto-reply
-                            _comm_log_write({"dir": "in", "tool": "message",
-                                             "from": from_peer, "mid": mid})
-                            auto_reply = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("auto_reply", False)
-                            triggered = False
-                            if auto_reply:
-                                invoke_claude_reply(project_dir)
-                                triggered = True
-                            msg_queue.put({
-                                "type": "message",
-                                "from_peer": from_peer,
-                                "message_id": mid,
-                                "auto_replied": triggered,
-                            })
+                            # parse body to determine routing
+                            shell_body = None
+                            if msg_body:
+                                try:
+                                    parsed = json.loads(msg_body.get("message", ""))
+                                    if parsed.get("type") == "shell":
+                                        shell_body = parsed
+                                except Exception:
+                                    pass
+
+                            if shell_body:
+                                # shell command — execute and reply directly, no claude
+                                try:
+                                    _comm_log_write({"dir": "in", "tool": "exec_shell",
+                                                     "from": from_peer, "cmd": shell_body.get("cmd", "")})
+                                except Exception:
+                                    pass
+                                threading.Thread(
+                                    target=_handle_shell,
+                                    args=(mid, shell_body.get("cmd", ""),
+                                          int(shell_body.get("timeout", 60)),
+                                          from_peer, relay, allowlist),
+                                    daemon=True,
+                                ).start()
+                                msg_queue.put({
+                                    "type": "message",
+                                    "from_peer": from_peer,
+                                    "message_id": mid,
+                                    "auto_replied": False,
+                                })
+                            else:
+                                # chat message — optionally trigger claude auto-reply
+                                try:
+                                    _comm_log_write({"dir": "in", "tool": "message",
+                                                     "from": from_peer, "mid": mid})
+                                except Exception:
+                                    pass
+                                auto_reply = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("auto_reply", False)
+                                triggered = False
+                                if auto_reply:
+                                    invoke_claude_reply(project_dir)
+                                    triggered = True
+                                msg_queue.put({
+                                    "type": "message",
+                                    "from_peer": from_peer,
+                                    "message_id": mid,
+                                    "auto_replied": triggered,
+                                })
+                        except Exception:
+                            pass  # never let a single message crash the SSE loop
         except Exception:
             pass
         msg_queue.put({"type": "status", "connected": False})
