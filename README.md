@@ -6,6 +6,7 @@ A system for connecting AI assistants across computers via a shared cloud server
 ## Table of Contents
 
 - [How It Works](#how-it-works)
+- [Architecture](#architecture)
 - [Getting Started](#getting-started)
   - [For New Users — Join an Existing Network](#for-new-users--join-an-existing-network)
   - [For Admins — Set Up Your Own Server](#for-admins--set-up-your-own-server)
@@ -22,6 +23,125 @@ Two computers communicate through a central cloud server — no direct connectio
 Your Computer  →  Cloud Server  ←  Their Computer
   (Machine A)   (always running)    (Machine B)
 ```
+
+---
+
+## Architecture
+
+Herald MCP is designed as a federated communication system where multiple local instances communicate via a stateless, central cloud coordinator. This architecture eliminates the need for peer-to-peer port forwarding, firewall traversal, or local server hosting.
+
+```
+                           +-----------------------------+
+                           |        Cloud Server         |
+                           |         (server.py)         |
+                           +--------------+--------------+
+                                          ^
+                          HTTP/SSE Pull   |   HTTP Post Ask/Reply
+                          & Push Events   |   & File Deposits
+                                          v
+                          +---------------+--------------+
+                          |      Your Windows Host       |
+                          +------------------------------+
+                          |                              |
+                          |   +----------------------+   |
+                          |   |   herald_tray.py     |   |
+                          |   | (System Tray Daemon) |   |
+                          |   +-----------+----------+   |
+                          |               |              |
+                          |       Spawns  v Background   |
+                          |   +----------------------+   |
+                          |   |      claude.exe      |   |
+                          |   |    (Claude Code)     |   |
+                          |   +-----------+----------+   |
+                          |               |              |
+                          |       Starts  v StdIO        |
+                          |   +----------------------+   |
+                          |   |    mcp_server.py     |   |
+                          |   |     (MCP Server)     |   |
+                          |   +----------------------+   |
+                          |                              |
+                          +------------------------------+
+```
+
+### 1. Component Overview
+
+| Component | File | Role |
+|-----------|------|------|
+| **Cloud Server** | `server.py` | Stateless FastAPI hub; routes messages and file deposits between peers via in-memory queues |
+| **Local MCP Server** | `mcp_server.py` | Exposes Herald tools (`ask_peer`, `exec_shell`, `reply`, etc.) to the local AI assistant via the MCP protocol |
+| **System Tray Daemon** | `herald_tray.py` | Persistent Windows background process; holds the SSE connection, executes shell commands, and spawns AI agents for auto-reply |
+
+---
+
+### 2. Message Delivery Model
+
+Herald uses **SSE-based push** with **work-queue semantics** — each message goes to exactly one subscriber.
+
+When a local daemon starts, it opens a long-lived GET request to the server's `/subscribe` endpoint. The server maps each peer name to a single `asyncio.Queue`. When a message arrives for that peer, it is pushed onto the queue and streamed to the one active subscriber. If the connection drops, the daemon automatically reconnects with a 5-second back-off.
+
+---
+
+### 3. Execution Paths
+
+Herald supports two communication pathways:
+
+#### Path A — Direct Shell (`exec_shell`)
+
+No AI needed on the remote side. The tray daemon executes the command directly in PowerShell after validating it against `allowlist.json`.
+
+```
+[Machine A]              [Cloud Server]           [Machine B Tray]
+     |                         |                         |
+     |-- POST /ask ----------->|                         |
+     |   {type: "shell",       |                         |
+     |    cmd: "..."}          |-- SSE push ------------>|
+     |                         |                         | validate allowlist
+     |                         |                         | run powershell
+     |                         |<-- POST /reply ---------|
+     |<-- stdout/stderr -------|                         |
+```
+
+#### Path B — AI Agent Round-Trip (`ask_peer`)
+
+Used when the remote peer needs to reason, use tools, or produce a natural-language reply.
+
+```
+[Machine A]              [Cloud Server]           [Machine B Tray]
+     |                         |                         |
+     |-- POST /ask ----------->|                         |
+     |   {message: "..."}      |-- SSE push ------------>|
+     |                         |                         | spawn claude.exe
+     |                         |                  [claude.exe subprocess]
+     |                         |<-- GET /pending --------|
+     |                         |--- message body ------->|
+     |                         |                         | reason + tools
+     |                         |<-- POST /reply ---------|
+     |<-- reply answer --------|                         |
+```
+
+The spawned `claude.exe` is restricted to only `mcp__herald__get_pending` and `mcp__herald__reply` — it cannot access local files or run shell commands.
+
+---
+
+### 4. File Transfer
+
+| Method | Tool | Use case |
+|--------|------|----------|
+| **Inline attachment** | `send_file` | Small files (≤ 5 MB) sent alongside a message; base64-encoded in the `/ask` payload |
+| **Mailbox deposit** | `deposit_file` / `get_deposits` / `save_attachment` | Larger or async transfers; server holds the file in memory until the receiver fetches it (default TTL: 30 min) |
+
+Direct file writes via `exec_shell` are typically blocked by the allowlist — use `deposit_file` instead.
+
+---
+
+### 5. Auto-Reply Lifecycle
+
+When **Auto Reply** is enabled in the tray UI:
+
+1. An incoming `ask_peer` message triggers the SSE handler in `herald_tray.py`.
+2. The daemon checks whether a previous `claude.exe` subprocess is still running (single-instance guard). If busy, the message is queued.
+3. A new `claude.exe` is spawned headlessly with `-p` (non-interactive) mode and a fixed `--allowedTools` list.
+4. Claude fetches the pending message, formulates a reply, and calls `reply()` to close the round-trip.
 
 ---
 
