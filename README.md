@@ -28,6 +28,7 @@ Herald MCP occupies a unique "Personal Bridge" niche: it turns a private compute
   - [For New Users — Join an Existing Network](#for-new-users--join-an-existing-network)
   - [For Admins — Set Up Your Own Server](#for-admins--set-up-your-own-server)
 - [System Tray UI](#system-tray-ui)
+- [Security](#security)
 - [Files](#files)
 
 ---
@@ -238,6 +239,31 @@ For administrators who want to deploy and configure their own cloud server, see 
 ## System Tray UI
 
 For details on the graphical user interface and its features, see [docs/system-tray-ui.md](docs/system-tray-ui.md).
+
+---
+
+## Security
+
+> [!IMPORTANT]
+> Herald MCP is a personal/hobbyist tool designed for trusted-machine scenarios (e.g., controlling your own second PC or connecting Claude on another machine you own). It is **not** commercial-grade P2P software, **not** designed for untrusted peers, and **not** a replacement for hardened enterprise remote-access tools like RDP or SSH.
+
+### Trust Model & Built-in Guards
+Herald operates under a config-level trust model without built-in peer authentication. However, it implements the following safeguards:
+- **Outbound-Only SSE:** The client daemon in `herald_tray.py` initiates outbound connections; no inbound firewall ports are opened.
+- **Command Allowlist:** The remote shell execution gates commands against `allowlist.json` before running them.
+- **Restricted Auto-Reply:** The daemon spawns `claude.exe` with `--allowedTools` restricted to `get_pending` and `reply`, preventing the remote agent from executing local commands or accessing local files.
+
+### Limitations & Non-Goals
+- **No Peer Auth:** Any client that knows the relay server URL and target peer name can read/write messages.
+- **No Transit Encryption:** Message payloads and file deposits are sent unencrypted (relying entirely on the relay server's TLS/HTTPS).
+- **Simple Whitelisting:** The allowlist uses string prefix/regex matching rather than cryptographic signing.
+- **Stateless Relay:** The cloud `server.py` stores all active messages and file deposits in-memory with zero access control.
+
+### Recommended Mitigations
+1. **Use HTTPS:** Run the relay server behind a reverse proxy (e.g., Caddy/Nginx) with TLS.
+2. **Minimize Allowlist:** Keep commands in `allowlist.json` as restrictive as possible.
+3. **Exit Daemon:** Exit the tray (`herald_tray.py`) when remote access is not active.
+4. **Keep URL Private:** Do not publish your relay server URL.
 
 ---
 
