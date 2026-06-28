@@ -262,7 +262,7 @@ Herald operates under a config-level trust model without built-in peer authentic
 ### Recommended Mitigations
 1. **Use HTTPS:** Run the relay server behind a reverse proxy (e.g., Caddy/Nginx) with TLS.
 2. **Minimize Allowlist:** Keep commands in `allowlist.json` as restrictive as possible.
-3. **Exit Daemon:** Exit the tray (`herald_tray.py`) when remote access is not active.
+3. **Exit Daemon When Idle:** Right-click the tray icon → **Exit** when you no longer need remote access. For maximum control, uncheck **Start on Login** in the tray window — this removes the automatic Windows startup entry so the daemon does not launch on boot. With auto-start disabled, Herald is completely offline until you manually run `herald_tray.py`, giving you explicit control over when your machine is reachable.
 4. **Keep URL Private:** Do not publish your relay server URL.
 
 ---
