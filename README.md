@@ -8,6 +8,7 @@ A system for connecting AI assistants across computers via a shared cloud server
 - [How It Works](#how-it-works)
 - [Architecture](#architecture)
 - [Getting Started](#getting-started)
+  - [Starting and Stopping Herald](#starting-and-stopping-herald)
   - [For New Users — Join an Existing Network](#for-new-users--join-an-existing-network)
   - [For Admins — Set Up Your Own Server](#for-admins--set-up-your-own-server)
 - [System Tray UI](#system-tray-ui)
@@ -145,7 +146,58 @@ When **Auto Reply** is enabled in the tray UI:
 
 ---
 
+### 6. Component Interaction: herald_tray.py vs mcp_server.py
+
+These two processes serve opposite directions — one listens, one speaks.
+
+| | `herald_tray.py` | `mcp_server.py` |
+|--|--|--|
+| **Started by** | Windows startup / manually | Claude Desktop (automatic) |
+| **Direction** | **Inbound** — holds the SSE connection; receives remote messages | **Outbound** — exposes tools to the local AI; sends messages |
+| **Analogy** | The machine's "ear" | The machine's "mouth" |
+| **If closed** | Machine goes deaf — no remote messages received | Local AI loses Herald tools |
+
+**Critical rule:** `mcp_server.py` has zero inbound capability. Even if Claude Desktop is open, closing `herald_tray.py` means no remote peer can reach this machine.
+
+| Tray | Claude Desktop | Can receive `exec_shell`? | Can receive `ask_peer`? |
+|------|---------------|--------------------------|------------------------|
+| ✅ Running | ✅ Open | ✅ Yes | ✅ Yes |
+| ✅ Running | ❌ Closed | ✅ Yes | ❌ No (no AI to reply) |
+| ❌ Exited | ✅ Open | ❌ No | ❌ No |
+| ❌ Exited | ❌ Closed | ❌ No | ❌ No |
+
+---
+
 ## Getting Started
+
+### Starting and Stopping Herald
+
+#### Starting
+
+Herald starts automatically on Windows startup after running `join.bat` or `setup.bat --install`.
+
+To start it manually:
+```
+python herald_tray.py
+```
+
+A Herald icon appears in the Windows system tray when it is running. Left-click to open the status window.
+
+#### Stopping
+
+Right-click the tray icon → **Exit**.
+
+This immediately closes the SSE connection to the relay server. The machine will no longer receive any messages from remote peers until the tray is restarted.
+
+#### Security Note
+
+> **Closing the tray = zero inbound network exposure.**
+>
+> While the tray is running, Herald maintains a persistent outbound connection to the relay server over HTTP. The relay can push messages to this machine at any time. If you are on a sensitive network or want to ensure no inbound traffic, exit the tray. Restarting it later resumes the connection instantly.
+>
+> The `allowlist.json` file controls which shell commands remote peers are permitted to run via `exec_shell`. Review and restrict it to only the commands you are comfortable allowing.
+
+---
 
 ### For New Users — Join an Existing Network
 
