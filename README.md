@@ -7,7 +7,7 @@ A system for connecting AI assistants across computers via a shared cloud server
 
 Herald MCP occupies a unique "Personal Bridge" niche: it turns a private computer into a reachable, AI-accessible node via a persistent, self-hosted relay. Unlike agent frameworks (which manage AI logic) or sandboxed environments (which manage security isolation), Herald focuses purely on remote accessibility — allowing frontier AIs to interact directly with your real local environment via MCP tools.
 
-**What it is not:** Herald is not an agent framework (it has no built-in agent logic or memory, and a smaller community than AutoGen/CrewAI) and is not sandboxed (commands run directly on the host shell). The tray daemon is Windows-only; Linux/Mac require manual startup.
+**What it is not:** Herald is a minimal agent communication and transport layer — it provides multi-agent delegation, tool execution, and message relaying via MCP, but does not manage reasoning, planning, or memory (those are delegated to the connected AI, e.g. Claude). It is also not sandboxed: commands run directly on the host shell. The tray daemon is Windows-only; Linux/Mac require manual startup.
 
 | Approach | Remote Shell | Relay | Self-hosted | Sandboxed |
 |:---|:---|:---|:---|:---|
