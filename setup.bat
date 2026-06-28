@@ -162,6 +162,10 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
+echo   Creating desktop shortcut...
+python -c "import sys,win32com.client,os; q=chr(34); d=os.path.join(os.path.expanduser('~'),'Desktop'); p=sys.argv[1]; ico=sys.argv[2]; lnk_path=os.path.join(d,'Herald MCP.lnk'); wsh=win32com.client.Dispatch('WScript.Shell'); s=wsh.CreateShortcut(lnk_path); s.TargetPath=sys.executable; s.Arguments=q+p+q; s.WorkingDirectory=os.path.dirname(p); s.IconLocation=ico; s.Description='Herald MCP Tray'; s.Save(); print('  [OK] Shortcut: '+lnk_path)" "%~dp0herald_tray.py" "%~dp0img\logo.ico"
+
+echo.
 echo   Starting Herald tray now...
 for /f "delims=" %%p in ('python -c "import sys,os; print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))"') do start "" "%%p" "%~dp0herald_tray.py"
 

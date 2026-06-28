@@ -141,6 +141,9 @@ class HeraldWindow:
 
         self.root = tk.Tk()
         self.root.title(f"Herald — {self.peer_name}")
+        _ico = Path(__file__).parent / "img" / "logo.ico"
+        if _ico.exists():
+            self.root.iconbitmap(str(_ico))
         self.root.geometry("720x520")
         self.root.minsize(600, 400)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)

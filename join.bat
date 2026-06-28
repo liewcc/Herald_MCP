@@ -81,6 +81,8 @@ if %ERRORLEVEL% equ 0 (
 )
 
 :: ── Done ─────────────────────────────────────────────────────────────────────
+echo   Creating desktop shortcut...
+python -c "import sys,win32com.client,os; q=chr(34); d=os.path.join(os.path.expanduser('~'),'Desktop'); p=sys.argv[1]; ico=sys.argv[2]; lnk_path=os.path.join(d,'Herald MCP.lnk'); wsh=win32com.client.Dispatch('WScript.Shell'); s=wsh.CreateShortcut(lnk_path); s.TargetPath=sys.executable; s.Arguments=q+p+q; s.WorkingDirectory=os.path.dirname(p); s.IconLocation=ico; s.Description='Herald MCP Tray'; s.Save(); print('  [OK] Shortcut: '+lnk_path)" "%~dp0herald_tray.py" "%~dp0img\logo.ico"
 echo.
 (
 echo MsgBox "Herald MCP installed successfully!" ^& Chr^(10^) ^& Chr^(10^) ^& "Next step: restart Claude Code or Antigravity," ^& Chr^(10^) ^& "then ask Claude to call list_peers^(^) to verify.", 64, "Herald MCP - Done"
