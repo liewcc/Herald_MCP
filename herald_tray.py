@@ -68,6 +68,9 @@ def save_config(cfg: dict) -> None:
 # ── Tray icon image ───────────────────────────────────────────────────────────
 
 def make_icon_image() -> Image.Image:
+    ico = Path(__file__).parent / "img" / "logo.ico"
+    if ico.exists():
+        return Image.open(ico).convert("RGBA").resize((64, 64))
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.ellipse([4, 4, 60, 60], fill=(30, 120, 220, 255))
