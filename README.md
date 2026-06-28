@@ -1,4 +1,4 @@
-<p align="center"><img src="img/logo.png" width="50%"></p>
+<p align="center"><img src="img/logo_nbg.png" width="50%"></p>
 
 # Herald MCP
 A system for connecting AI assistants across computers via a shared cloud server.
