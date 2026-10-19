@@ -250,22 +250,23 @@ For details on the graphical user interface and its features, see [docs/system-t
 > Herald MCP is a personal/hobbyist tool designed for trusted-machine scenarios (e.g., controlling your own second PC or connecting Claude on another machine you own). It is **not** commercial-grade P2P software, **not** designed for untrusted peers, and **not** a replacement for hardened enterprise remote-access tools like RDP or SSH.
 
 ### Trust Model & Built-in Guards
-Herald operates under a config-level trust model without built-in peer authentication. However, it implements the following safeguards:
+Herald operates under a shared-secret trust model. It implements the following safeguards:
+- **Relay Token:** `server.py` refuses to start without a token and rejects (401) every request without a matching `X-Herald-Token` header. All peers share the same `token` in `config.json`.
 - **Outbound-Only SSE:** The client daemon in `herald_tray.py` initiates outbound connections; no inbound firewall ports are opened.
-- **Command Allowlist:** The remote shell execution gates commands against `allowlist.json` before running them.
+- **Command Guard:** `exec_shell` commands are parsed with PowerShell's own parser; only a single pipeline whose every element matches `allowlist.json` runs. `;`, `$(...)`, `(...)`, `{...}`, variables, `&` and redirection are rejected.
 - **Restricted Auto-Reply:** The daemon spawns `claude.exe` with `--allowedTools` restricted to `get_pending` and `reply`, preventing the remote agent from executing local commands or accessing local files.
 
 ### Limitations & Non-Goals
-- **No Peer Auth:** Any client that knows the relay server URL and target peer name can read/write messages.
+- **Shared Secret Only:** Every token holder can impersonate any peer name; there is no per-peer identity.
 - **No Transit Encryption:** Message payloads and file deposits are sent unencrypted (relying entirely on the relay server's TLS/HTTPS).
-- **Simple Whitelisting:** The allowlist uses string prefix/regex matching rather than cryptographic signing.
-- **Stateless Relay:** The cloud `server.py` stores all active messages and file deposits in-memory with zero access control.
+- **Broad Rules:** The default `python ` and `claude` rules still permit arbitrary code for token holders.
+- **Stateless Relay:** The cloud `server.py` stores all active messages and file deposits in-memory, readable by any token holder.
 
 ### Recommended Mitigations
 1. **Use HTTPS:** Run the relay server behind a reverse proxy (e.g., Caddy/Nginx) with TLS.
 2. **Minimize Allowlist:** Keep commands in `allowlist.json` as restrictive as possible.
 3. **Exit Daemon When Idle:** Right-click the tray icon → **Exit** when you no longer need remote access. For maximum control, uncheck **Start on Login** in the tray window — this removes the automatic Windows startup entry so the daemon does not launch on boot. With auto-start disabled, Herald is completely offline until you manually run `herald_tray.py`, giving you explicit control over when your machine is reachable.
-4. **Keep URL Private:** Do not publish your relay server URL.
+4. **Keep URL and Token Private:** Do not publish your relay server URL or token. The relay is plain HTTP, so without TLS or a private network (e.g. Tailscale) the token can be sniffed.
 
 ---
 

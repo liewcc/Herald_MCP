@@ -2,3 +2,6 @@ fastapi
 uvicorn[standard]
 httpx
 mcp
+pystray
+pillow
+pywin32

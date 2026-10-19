@@ -13,5 +13,11 @@
   {"type": "prefix", "value": "git "},
   {"type": "prefix", "value": "schtasks "},
   {"type": "prefix", "value": "claude"},
-  {"type": "regex",  "value": "^echo\\s"}
+  {"type": "regex", "value": "^echo\\s"},
+  {"type": "prefix", "value": "findstr "},
+  {"type": "prefix", "value": "Select-Object"},
+  {"type": "prefix", "value": "Sort-Object"},
+  {"type": "prefix", "value": "Format-Table"},
+  {"type": "prefix", "value": "Format-List"},
+  {"type": "prefix", "value": "Measure-Object"}
 ]

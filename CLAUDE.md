@@ -5,11 +5,19 @@ Agents communicate via a central relay server using MCP tools.
 
 ## Setup
 
-1. Copy `config.json.example` to `config.json` and set:
-   - `peer_name` — this machine's name on the network
-   - `relay_url` — URL of the relay server
+1. Copy `config.example.json` to `config.json` and set:
+   - `name` — this machine's peer name on the network
+   - `server_url` — URL of the relay server
+   - `token` — the relay's shared secret (same value on the relay and every peer)
 2. Configure your agent host (Claude Desktop, Cursor, etc.) to load `mcp_server.py` as an MCP server.
 3. On unattended peers, start `herald_tray.py` at boot — it maintains the persistent SSE connection.
+
+The relay (`server.py`) refuses to start without a token (`HERALD_TOKEN` env or `"token"` in its
+config.json) and returns 401 to any request whose `X-Herald-Token` header doesn't match.
+`server_deploy.ps1` generates one on first deploy. The relay speaks plain HTTP, so the token is
+visible on the wire: prefer a private network (e.g. Tailscale) over a public IP.
+
+Run `python test_security.py` after touching auth or the shell guard.
 
 ## Available Tools
 
@@ -45,10 +53,16 @@ exec_shell(peer_name="<remote>", cmd="Get-Date")
 ```
 
 **Constraints:**
-- Commands must match the allowlist defined in `allowlist.json` (repo root)
-- Allowed by default: `Get-*`, `git `, `python `, `dir`, `ls`, `tasklist`, `schtasks `, `echo `
-- Multi-line scripts are blocked — use `python -c "..."` for complex single-line operations
-- Quote escaping in `python -c`: use `chr(34)` instead of nested quotes
+- The command is parsed with PowerShell's own parser. It must be **one pipeline**, and **every**
+  element must match a rule in `allowlist.json` (repo root), e.g. `tasklist | findstr /i claude`
+- Rejected: `;`, newlines, `$(...)`, `(...)`, `{...}`, `$variables`, `&` / `.` invocation,
+  `>` redirection, `.Method()` calls, `@{}` hashtables
+- Allowed by default: `Get-*`, `git `, `python `, `dir`, `ls`, `tasklist`, `schtasks `, `echo `,
+  `findstr `, `Select-Object`, `Sort-Object`, `Format-Table`, `Format-List`, `Measure-Object`
+- `python ` and `claude` rules still allow arbitrary code (`python -c ...`); the relay token is
+  what keeps strangers out, not the allowlist
+- Quote escaping in `python -c`: use `chr(34)` instead of nested quotes; `"..."` is fine as long
+  as it contains no `$`
 
 ## ask_peer
 

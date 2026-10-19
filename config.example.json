@@ -1,5 +1,6 @@
 {
   "name": "machine-a",
   "server_url": "http://YOUR_SERVER_IP:7700",
+  "token": "SAME_SHARED_TOKEN_AS_THE_SERVER",
   "peers": ["machine-b"]
 }

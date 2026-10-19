@@ -15,6 +15,7 @@ Auto Reply: when enabled, invokes claude.exe once per incoming message (event-dr
 
 Auto-start: python herald_tray.py --install
 """
+import base64
 import json
 import os
 import queue
@@ -59,6 +60,10 @@ TASK_PRESETS = [
 
 def load_config() -> dict:
     return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def _auth() -> dict:
+    return {"X-Herald-Token": load_config().get("token", "")}
 
 
 def save_config(cfg: dict) -> None:
@@ -349,7 +354,7 @@ class HeraldWindow:
                 "message":    json.dumps({"type": "shell", "cmd": cmd}),
                 "attachments": [],
             }
-            with httpx.Client(timeout=20.0) as client:
+            with httpx.Client(timeout=20.0, headers=_auth()) as client:
                 r = client.post(f"{relay.rstrip('/')}/ask", json=payload)
                 data   = r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
                 answer = data.get("answer", str(data))
@@ -553,16 +558,52 @@ def _load_allowlist() -> list:
     return result
 
 
-def _shell_allowed(cmd: str, allowlist: list) -> bool:
+# Parses the command with PowerShell's own parser (so quoting can't fool us) and
+# prints "start end" offsets of each pipeline element. Exits 1 on anything that
+# could run code outside those elements: ; or newlines (multiple statements),
+# $(...), (...), {...}, variables, & / . invocation, redirection, member calls.
+_PS_GUARD = r"""
+$c = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:HERALD_CMD_B64))
+$t = $null; $e = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseInput($c, [ref]$t, [ref]$e)
+if ($e.Count -or $ast.ParamBlock -or $ast.BeginBlock -or $ast.ProcessBlock -or $ast.DynamicParamBlock) { exit 1 }
+$s = $ast.EndBlock.Statements
+if ($s.Count -ne 1 -or $s[0] -isnot [System.Management.Automation.Language.PipelineAst]) { exit 1 }
+$banned = 'SubExpressionAst','ParenExpressionAst','ScriptBlockExpressionAst','VariableExpressionAst',
+  'ArrayExpressionAst','InvokeMemberExpressionAst','MemberExpressionAst','FileRedirectionAst',
+  'MergingRedirectionAst','ExpandableStringExpressionAst','HashtableAst','ConvertExpressionAst','IndexExpressionAst'
+if ($ast.Find({ param($n) $banned -contains $n.GetType().Name }, $true)) { exit 1 }
+foreach ($el in $s[0].PipelineElements) {
+  if ($el -isnot [System.Management.Automation.Language.CommandAst] -or $el.InvocationOperator -ne 'Unknown') { exit 1 }
+  "$($el.Extent.StartOffset) $($el.Extent.EndOffset)"
+}
+"""
+_PS_GUARD_B64 = base64.b64encode(_PS_GUARD.encode("utf-16-le")).decode("ascii")
+
+
+def _rule_match(s: str, allowlist: list) -> bool:
     import re
-    s = cmd.strip()
-    for rule in allowlist:
-        if isinstance(rule, re.Pattern):
-            if rule.match(s):
-                return True
-        elif s.startswith(rule):
-            return True
-    return False
+    return any(rule.match(s) if isinstance(rule, re.Pattern) else s.startswith(rule)
+               for rule in allowlist)
+
+
+def _shell_allowed(cmd: str, allowlist: list) -> bool:
+    """Allow only a single pipeline whose every element matches an allowlist rule."""
+    if any(ord(ch) > 0xFFFF for ch in cmd):  # parser offsets are UTF-16 units
+        return False
+    env = {**os.environ, "HERALD_CMD_B64": base64.b64encode(cmd.encode("utf-8")).decode("ascii")}
+    try:
+        p = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", _PS_GUARD_B64],
+            capture_output=True, text=True, timeout=15, env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception:
+        return False
+    if p.returncode != 0:
+        return False
+    parts = [cmd[int(a):int(b)] for a, b in (ln.split() for ln in p.stdout.splitlines() if ln.strip())]
+    return bool(parts) and all(_rule_match(x, allowlist) for x in parts)
 
 
 def _handle_shell(mid: str, cmd: str, timeout_s: int, from_peer: str,
@@ -588,7 +629,7 @@ def _handle_shell(mid: str, cmd: str, timeout_s: int, from_peer: str,
                          "rc": result.get("returncode"), "preview": answer[:200]})
 
     try:
-        with httpx.Client(timeout=10.0) as c:
+        with httpx.Client(timeout=10.0, headers=_auth()) as c:
             c.post(f"{relay.rstrip('/')}/reply/{mid}", json={"answer": answer})
     except Exception:
         pass
@@ -610,7 +651,7 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
         reconnect.clear()
         peer_name = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("name", cfg["name"])
         try:
-            with httpx.Client(timeout=None) as client:
+            with httpx.Client(timeout=None, headers=_auth()) as client:
                 with client.stream("GET", url, params={"peer": peer_name}) as r:
                     msg_queue.put({"type": "status", "connected": True})
                     for line in r.iter_lines():
@@ -641,7 +682,7 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
                             # (never reuse the SSE streaming client for other requests)
                             msg_body = None
                             try:
-                                with httpx.Client(timeout=5.0) as peek:
+                                with httpx.Client(timeout=5.0, headers=_auth()) as peek:
                                     rp = peek.get(f"{relay}/pending", params={"peer": peer_name})
                                     for m in (rp.json() if rp.status_code == 200 else []):
                                         if m.get("message_id") == mid:

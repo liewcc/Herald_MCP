@@ -1,6 +1,6 @@
 import fastapi
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Tuple, Optional
 import uvicorn
@@ -11,12 +11,14 @@ import json
 import pathlib
 import datetime
 import contextlib
+import hmac
+import os
 
 # Load config.json from same directory as this file
 current_dir = pathlib.Path(__file__).parent.resolve()
 config_path = current_dir / "config.json"
 try:
-    with open(config_path, "r") as f:
+    with open(config_path, "r", encoding="utf-8-sig") as f:  # PS5 Set-Content writes a BOM
         config = json.load(f)
 except Exception:
     config = {
@@ -26,6 +28,11 @@ except Exception:
     }
 
 port = config.get("port", 7700)
+
+# Shared secret every client must send as X-Herald-Token. Fail closed: no token, no server.
+TOKEN = os.environ.get("HERALD_TOKEN") or config.get("token", "")
+if not TOKEN:
+    raise SystemExit("Refusing to start: set HERALD_TOKEN or \"token\" in config.json")
 
 async def _cleanup_deposits():
     while True:
@@ -43,6 +50,14 @@ async def lifespan(app):
     task.cancel()
 
 app = FastAPI(title="Herald MCP Long-poll Server", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    sent = request.headers.get("x-herald-token", "")
+    if not hmac.compare_digest(sent.encode(), TOKEN.encode()):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await call_next(request)
 
 # In-memory store:
 pending_messages: dict[str, dict] = {}

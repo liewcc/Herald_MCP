@@ -26,6 +26,10 @@ def server_url(config: dict, path: str) -> str:
     return base.rstrip("/") + path
 
 
+def _auth(config: dict) -> dict:
+    return {"X-Herald-Token": config.get("token", "")}
+
+
 def _log(**kwargs) -> None:
     entry = {"ts": datetime.datetime.now().strftime("%H:%M:%S"), **kwargs}
     with COMM_LOG.open("a", encoding="utf-8") as f:
@@ -34,11 +38,10 @@ def _log(**kwargs) -> None:
 
 @mcp.tool()
 async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = None) -> dict:
-    """Send a message to a named peer's Claude. Returns immediately — does not block.
+    """Send a message to a named peer's Claude and wait up to ~50s for its reply.
 
-    The relay queues the message even after this call returns. The remote peer's
-    auto_reply will process it and push a reply to this machine's pending inbox.
-    Use get_pending() after ~30-60s to retrieve the reply.
+    The remote peer's herald_tray auto_reply runs claude, which answers via reply().
+    On timeout the result carries the message_id; the peer may still be working.
 
     Args:
         peer_name: Target peer name.
@@ -65,7 +68,7 @@ async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = N
 
     # Block and wait for April's claude to reply (typically 20-50s).
     # 50s keeps us under the MCP framework's tool-call timeout (~60-120s).
-    async with httpx.AsyncClient(timeout=50.0) as client:
+    async with httpx.AsyncClient(timeout=50.0, headers=_auth(config)) as client:
         try:
             r = await client.post(server_url(config, "/ask"), json=payload)
             result = r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
@@ -94,7 +97,7 @@ async def get_pending() -> list:
         return [{"error": str(e)}]
 
     name = config.get("name", "")
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
         try:
             r = await client.get(server_url(config, "/pending"), params={"peer": name})
             return r.json() if r.status_code == 200 else [{"error": f"HTTP {r.status_code}"}]
@@ -112,7 +115,7 @@ async def reply(message_id: str, answer: str, attachments: Optional[list] = None
     except Exception as e:
         return {"error": str(e)}
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
         try:
             r = await client.post(server_url(config, f"/reply/{message_id}"),
                                   json={"answer": answer, "attachments": attachments})
@@ -130,7 +133,7 @@ async def list_peers() -> dict:
         return {"error": str(e)}
 
     peers = config.get("peers", [])
-    async with httpx.AsyncClient(timeout=3.0) as client:
+    async with httpx.AsyncClient(timeout=3.0, headers=_auth(config)) as client:
         try:
             r = await client.get(server_url(config, "/health"))
             server_ok = r.status_code == 200
@@ -153,7 +156,7 @@ async def ping_peer(peer_name: str) -> dict:
         return {"online": False, "error": str(e)}
 
     t0 = time.perf_counter()
-    async with httpx.AsyncClient(timeout=5.0) as client:
+    async with httpx.AsyncClient(timeout=5.0, headers=_auth(config)) as client:
         try:
             r = await client.get(server_url(config, "/health"))
             ms = int((time.perf_counter() - t0) * 1000)
@@ -198,7 +201,7 @@ async def send_file(peer_name: str, file_path: str, message: str = "") -> dict:
         "attachments": [{"filename": path.name, "mime_type": mime_type, "data_b64": data_b64}],
     }
 
-    async with httpx.AsyncClient(timeout=305.0) as client:
+    async with httpx.AsyncClient(timeout=305.0, headers=_auth(config)) as client:
         try:
             r = await client.post(server_url(config, "/ask"), json=payload)
             return r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}", "detail": r.text}
@@ -239,7 +242,7 @@ async def deposit_file(peer_name: str, file_path: str, message: str = "", expire
         "message": message or f"File: {path.name}",
         "expires_minutes": expires_minutes,
     }
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
         try:
             r = await client.post(server_url(config, "/deposit"), json=payload)
             return r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
@@ -260,7 +263,7 @@ async def get_deposits(save_dir: str = "") -> list:
         return [{"error": str(e)}]
 
     name = config.get("name", "")
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
         try:
             r = await client.get(server_url(config, "/deposits"), params={"peer": name})
             if r.status_code != 200:
@@ -296,7 +299,7 @@ async def save_attachment(message_id: str, save_dir: str) -> dict:
         return {"error": str(e)}
 
     name = config.get("name", "")
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
         try:
             r = await client.get(server_url(config, "/pending"), params={"peer": name})
             if r.status_code != 200:
@@ -329,10 +332,13 @@ async def save_attachment(message_id: str, save_dir: str) -> dict:
 
 @mcp.tool()
 async def exec_shell(peer_name: str, cmd: str, timeout: int = 60) -> dict:
-    """Execute a PowerShell command on a remote peer running shell_agent.py.
+    """Execute a PowerShell command on a remote peer running herald_tray.py.
+
+    The peer accepts one pipeline only; every element must match its allowlist.json.
+    No ; $ ( ) { } & or redirection.
 
     Args:
-        peer_name: Target peer name (must be running shell_agent.py).
+        peer_name: Target peer name (must be running herald_tray.py).
         cmd: PowerShell command string to execute.
         timeout: Seconds to wait for the result (default 60).
     """
@@ -351,7 +357,7 @@ async def exec_shell(peer_name: str, cmd: str, timeout: int = 60) -> dict:
         "attachments": [],
     }
 
-    async with httpx.AsyncClient(timeout=timeout + 5.0) as client:
+    async with httpx.AsyncClient(timeout=timeout + 5.0, headers=_auth(config)) as client:
         try:
             r = await client.post(server_url(config, "/ask"), json=payload)
             if r.status_code != 200:
