@@ -79,7 +79,7 @@ Write-Host "  [OK] Herald started and set to auto-start on boot." -ForegroundCol
 # Verify
 Start-Sleep -Seconds 3
 try {
-    $r = Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 5
+    $r = Invoke-RestMethod -Uri "http://localhost:$PORT/health" -TimeoutSec 5 -Headers @{ "X-Herald-Token" = $cfg.token }
     Write-Host ""
     Write-Host "============================================" -ForegroundColor Green
     Write-Host " Herald is RUNNING on port $PORT" -ForegroundColor Green
