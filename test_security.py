@@ -63,4 +63,11 @@ time.sleep(4.5)
 run.clear()
 assert sent == [("cc", "2026-01-01 00:00:02 Refund: Done in 1m 2s.")], sent
 
-print(f"OK: relay auth + {len(ok)} allowed / {len(bad)} blocked + file watch")
+# Locked auto-reply: no built-in tools, herald only, everything but get_pending/reply removed.
+a = herald_tray.reply_args("claude", locked=True)
+assert a[a.index("--tools") + 1] == "" and "--strict-mcp-config" in a, a
+assert "mcp__herald__exec_shell" in a[a.index("--disallowedTools") + 1], a
+assert a[a.index("--permission-mode") + 1] == "dontAsk", a
+assert "--tools" not in herald_tray.reply_args("claude", locked=False)
+
+print(f"OK: relay auth + {len(ok)} allowed / {len(bad)} blocked + file watch + locked auto-reply")

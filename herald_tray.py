@@ -123,6 +123,26 @@ def find_claude_exe() -> str | None:
 _claude_proc: subprocess.Popen | None = None
 
 
+def reply_args(claude_exe: str, locked: bool) -> list:
+    """claude -p command line for auto-reply.
+
+    locked (config "auto_reply_locked"): no built-in tools, only the herald MCP server, and only
+    get_pending / reply usable — the remote peer can get text answers but nothing that touches
+    this machine (no shell, files, screen or other MCP servers).
+    """
+    args = [claude_exe, "-p", REPLY_PROMPT, "--allowedTools", ALLOWED_TOOLS]
+    if locked:
+        herald = {"mcpServers": {"herald": {
+            "command": str(Path(sys.executable).with_name("pythonw.exe")),
+            "args": [str(Path(__file__).with_name("mcp_server.py"))]}}}
+        others = ",".join(f"mcp__herald__{t}" for t in (
+            "ask_peer", "exec_shell", "send_file", "deposit_file", "get_deposits",
+            "save_attachment", "list_peers", "ping_peer"))
+        args += ["--tools", "", "--strict-mcp-config", "--mcp-config", json.dumps(herald),
+                 "--disallowedTools", others, "--permission-mode", "dontAsk"]
+    return args
+
+
 def invoke_claude_reply(project_dir: str) -> None:
     global _claude_proc
     # ponytail: single-instance guard — skip if previous claude is still running
@@ -132,7 +152,7 @@ def invoke_claude_reply(project_dir: str) -> None:
     if not claude_exe:
         return
     _claude_proc = subprocess.Popen(
-        [claude_exe, "-p", REPLY_PROMPT, "--allowedTools", ALLOWED_TOOLS],
+        reply_args(claude_exe, load_config().get("auto_reply_locked", False)),
         cwd=project_dir,
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
