@@ -157,6 +157,8 @@ class HeraldWindow:
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
 
         self._reconnect = threading.Event()
+        self.icon = None            # pystray icon, set by main() for notifications
+        self._last_notified = {}    # peer -> time.monotonic() of last toast
         self._log_pos = 0  # byte offset in herald_comm.log
         self._build_ui()
         self.root.withdraw()
@@ -210,6 +212,14 @@ class HeraldWindow:
             bottom, text="Auto Reply",
             variable=self.autoreply_var,
             command=self._toggle_autoreply,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(12, 0))
+
+        self.notify_var = tk.BooleanVar(value=self.cfg.get("notify", True))
+        tk.Checkbutton(
+            bottom, text="Notify",
+            variable=self.notify_var,
+            command=self._toggle_notify,
             font=("Segoe UI", 9),
         ).pack(side="left", padx=(12, 0))
 
@@ -378,6 +388,7 @@ class HeraldWindow:
                     self.set_status(event["connected"])
                 elif etype in ("message", "deposit"):
                     self._append_msg_log(event)
+                    self._notify(event)
                 elif etype == "commlog":
                     self._append_comm_entry(event["entry"])
                 elif etype == "tasks_result":
@@ -493,6 +504,32 @@ class HeraldWindow:
     def _toggle_autoreply(self):
         self.cfg["auto_reply"] = self.autoreply_var.get()
         save_config(self.cfg)
+
+    def _toggle_notify(self):
+        self.cfg["notify"] = self.notify_var.get()
+        save_config(self.cfg)
+
+    def _notify(self, event: dict):
+        """Windows toast telling the user a peer is using this machine."""
+        # ponytail: one toast per peer per 60s so a burst of exec_shell calls doesn't spam;
+        # later commands inside the window only show in the Messages / Comm Log tabs.
+        if not self.notify_var.get() or self.icon is None:
+            return
+        peer = event.get("from_peer", "?")
+        now = time.monotonic()
+        if now - self._last_notified.get(peer, -60.0) < 60:
+            return
+        self._last_notified[peer] = now
+        if event["type"] == "deposit":
+            body = f"{peer} sent a file to this PC"
+        elif event.get("cmd"):
+            body = f"{peer} is running a command on this PC: {event['cmd'][:100]}"
+        else:
+            body = f"{peer} is talking to this PC's AI"
+        try:
+            self.icon.notify(body, "Herald")
+        except Exception:
+            pass
 
     def _rename(self):
         new_name = simpledialog.askstring(
@@ -721,6 +758,7 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
                                     "from_peer": from_peer,
                                     "message_id": mid,
                                     "auto_replied": False,
+                                    "cmd": shell_body.get("cmd", ""),
                                 })
                             else:
                                 # chat message — optionally trigger claude auto-reply
@@ -786,6 +824,7 @@ def main() -> None:
         ),
     )
 
+    win.icon = icon
     threading.Thread(target=icon.run, daemon=True).start()
 
     win.run()
