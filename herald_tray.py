@@ -469,6 +469,10 @@ class HeraldWindow:
             mid  = entry.get("mid", "?")
             text = f"[{ts}] ← [SSE msg] {peer}  ID:{mid[:8]}…\n"
             tag  = "msg_in"
+        elif tool == "notice":
+            arrow = "→" if direction == "out" else "←"
+            text = f"[{ts}] {arrow} notice {peer}: {entry.get('text') or entry.get('error', '')}\n"
+            tag  = "err" if entry.get("error") else "msg_in"
         else:
             # other entries (exec, reply, blocked from shell_agent.log)
             text = f"[{ts}] {json.dumps(entry)}\n"
@@ -516,6 +520,12 @@ class HeraldWindow:
         if not self.notify_var.get() or self.icon is None:
             return
         peer = event.get("from_peer", "?")
+        if event.get("notice"):    # a notice is the point of the message: always show it
+            try:
+                self.icon.notify(event["notice"][:250], f"Herald — {peer}")
+            except Exception:
+                pass
+            return
         now = time.monotonic()
         if now - self._last_notified.get(peer, -60.0) < 60:
             return
@@ -665,12 +675,57 @@ def _handle_shell(mid: str, cmd: str, timeout_s: int, from_peer: str,
         answer = json.dumps(result)
         _comm_log_write({"dir": "reply", "to": from_peer,
                          "rc": result.get("returncode"), "preview": answer[:200]})
+    _post_reply(relay, mid, answer)
 
+
+def _post_reply(relay: str, mid: str, answer: str) -> None:
     try:
         with httpx.Client(timeout=10.0, headers=_auth()) as c:
             c.post(f"{relay.rstrip('/')}/reply/{mid}", json={"answer": answer})
     except Exception:
         pass
+
+
+def send_notice(peer: str, text: str) -> None:
+    """Tell a peer's tray something (toast + Comm Log there). No shell, no claude."""
+    cfg = load_config()
+    payload = {"message_id": str(uuid.uuid4()), "from_peer": cfg.get("name", "unknown"), "to_peer": peer,
+               "message": json.dumps({"type": "notice", "text": text}), "attachments": []}
+    try:
+        with httpx.Client(timeout=30.0, headers=_auth()) as c:
+            c.post(f"{cfg['server_url'].rstrip('/')}/ask", json=payload)
+        _comm_log_write({"dir": "out", "tool": "notice", "peer": peer, "text": text[:200]})
+    except Exception as e:
+        _comm_log_write({"dir": "out", "tool": "notice", "peer": peer, "error": str(e)})
+
+
+def watch_thread(rule: dict, running: threading.Event) -> None:
+    """Tail rule["file"]; each new line containing rule["match"] goes to rule["peer"] as a notice.
+
+    config.json: "watch": [{"file": "C:/AI/Open_Vending/log/scan.log",
+                            "match": "Refund: Done in", "peer": "cc"}]
+    """
+    # ponytail: 2s polling, no file-change events; ceiling is ~2s latency, fine for status lines.
+    path, match, peer = Path(rule["file"]), rule["match"], rule["peer"]
+    pos = path.stat().st_size if path.exists() else 0     # only lines written from now on
+    while running.is_set():
+        time.sleep(2)
+        try:
+            size = path.stat().st_size
+            if size < pos:                                 # truncated or replaced: start over
+                pos = 0
+            if size == pos:
+                continue
+            with path.open("rb") as f:
+                f.seek(pos)
+                chunk = f.read()
+            chunk = chunk[:chunk.rfind(b"\n") + 1]            # leave a half-written line for next time
+            pos += len(chunk)
+            for line in chunk.decode("utf-8", errors="replace").splitlines():
+                if match in line:
+                    threading.Thread(target=send_notice, args=(peer, line.strip()), daemon=True).start()
+        except Exception:
+            pass
 
 
 def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
@@ -730,16 +785,26 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
                                 pass
 
                             # parse body to determine routing
-                            shell_body = None
+                            shell_body = notice_body = None
                             if msg_body:
                                 try:
                                     parsed = json.loads(msg_body.get("message", ""))
                                     if parsed.get("type") == "shell":
                                         shell_body = parsed
+                                    elif parsed.get("type") == "notice":
+                                        notice_body = parsed
                                 except Exception:
                                     pass
 
-                            if shell_body:
+                            if notice_body:
+                                # notice — show and log it, ack at once; no shell, no claude
+                                text = str(notice_body.get("text", ""))[:500]
+                                _comm_log_write({"dir": "in", "tool": "notice", "from": from_peer, "text": text})
+                                threading.Thread(target=_post_reply, args=(relay, mid, '{"ok": true}'),
+                                                 daemon=True).start()
+                                msg_queue.put({"type": "message", "from_peer": from_peer,
+                                               "message_id": mid, "notice": text})
+                            elif shell_body:
                                 # shell command — execute and reply directly, no claude
                                 try:
                                     _comm_log_write({"dir": "in", "tool": "exec_shell",
@@ -809,6 +874,8 @@ def main() -> None:
         args=(cfg, msg_queue, running, win._reconnect, project_dir),
         daemon=True,
     ).start()
+    for rule in cfg.get("watch", []):
+        threading.Thread(target=watch_thread, args=(rule, running), daemon=True).start()
 
     def on_click(icon, item):
         win.show()

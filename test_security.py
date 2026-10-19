@@ -47,4 +47,20 @@ for cmd in ok:
     assert herald_tray._shell_allowed(cmd, rules), f"should allow: {cmd!r}"
 for cmd in bad:
     assert not herald_tray._shell_allowed(cmd, rules), f"should block: {cmd!r}"
-print(f"OK: relay auth + {len(ok)} allowed / {len(bad)} blocked")
+# File watch: only new, complete lines containing the match are sent.
+import tempfile, threading, time  # noqa: E402
+sent = []
+herald_tray.send_notice = lambda peer, text: sent.append((peer, text))
+log = os.path.join(tempfile.mkdtemp(), "scan.log")
+open(log, "w").write("2026-01-01 00:00:00 Refund: Done in old.\n")      # existing line: ignored
+run = threading.Event(); run.set()
+threading.Thread(target=herald_tray.watch_thread,
+                 args=({"file": log, "match": "Refund: Done in", "peer": "cc"}, run), daemon=True).start()
+time.sleep(0.5)
+with open(log, "a") as f:
+    f.write("2026-01-01 00:00:01 Refund: exporting...\n2026-01-01 00:00:02 Refund: Done in 1m 2s.\n2026-01-01 00:00:03 Refund: Done in hal")
+time.sleep(4.5)
+run.clear()
+assert sent == [("cc", "2026-01-01 00:00:02 Refund: Done in 1m 2s.")], sent
+
+print(f"OK: relay auth + {len(ok)} allowed / {len(bad)} blocked + file watch")
