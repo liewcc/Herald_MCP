@@ -618,6 +618,7 @@ def _handle_shell(mid: str, cmd: str, timeout_s: int, from_peer: str,
             proc = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", cmd],
                 capture_output=True, text=True, timeout=timeout_s,
+                creationflags=subprocess.CREATE_NO_WINDOW,  # tray is pythonw: no console to inherit
             )
             result = {"stdout": proc.stdout, "stderr": proc.stderr, "returncode": proc.returncode}
         except subprocess.TimeoutExpired:

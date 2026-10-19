@@ -1,5 +1,6 @@
 """Self-check for the relay token and the exec_shell guard. Run: python test_security.py"""
 import os
+import re
 import sys
 import types
 
@@ -18,7 +19,9 @@ assert c.get("/health", headers={"X-Herald-Token": "wrong"}).status_code == 401
 assert c.get("/pending", headers={"X-Herald-Token": "test-token"}).status_code == 200
 
 # Guard: allowlisted single pipelines pass, anything that can smuggle code fails.
-rules = herald_tray._load_allowlist()
+# Fixed rules, not allowlist.json: a machine may trim its local allowlist (cc drops python).
+rules = ["Get-", "tasklist", "findstr ", "Sort-Object", "Select-Object", "Format-Table",
+         "python ", "git ", re.compile(r"^echo\s", re.IGNORECASE)]
 ok = [
     "Get-Date",
     "tasklist | findstr /i claude",
