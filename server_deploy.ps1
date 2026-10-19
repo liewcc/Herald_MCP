@@ -69,7 +69,7 @@ Write-Host "[5/5] Registering Herald as startup task..." -ForegroundColor Yellow
 $pythonPath = (& $python -c "import sys; print(sys.executable)")
 $action = New-ScheduledTaskAction -Execute $pythonPath -Argument "$HERALD_DIR\server.py" -WorkingDirectory $HERALD_DIR
 $trigger = New-ScheduledTaskTrigger -AtStartup
-$settings = New-ScheduledTaskSettingsSet -RestartOnFailure -RestartInterval (New-TimeSpan -Minutes 1) -RestartCount 3
+$settings = New-ScheduledTaskSettingsSet -RestartInterval (New-TimeSpan -Minutes 1) -RestartCount 3
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
 Unregister-ScheduledTask -TaskName "HeraldMCP" -Confirm:$false -ErrorAction SilentlyContinue
 Register-ScheduledTask -TaskName "HeraldMCP" -Action $action -Trigger $trigger -Settings $settings -Principal $principal | Out-Null

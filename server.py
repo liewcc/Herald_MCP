@@ -13,6 +13,8 @@ import datetime
 import contextlib
 import hmac
 import os
+import sys
+import time
 
 # Load config.json from same directory as this file
 current_dir = pathlib.Path(__file__).parent.resolve()
@@ -234,4 +236,15 @@ async def get_deposits(peer: str = ""):
     return result
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    if sys.stderr is None:  # pythonw has no console; uvicorn's logging needs a stream
+        sys.stdout = sys.stderr = open(current_dir / "server.log", "a", buffering=1, encoding="utf-8")
+    # Set "host" to a Tailscale IP to listen only on the tailnet. At logon that IP may not
+    # exist yet, so uvicorn exits on the failed bind; retry until it binds. A normal
+    # shutdown (Ctrl-C) returns instead of raising, and ends the loop.
+    while True:
+        try:
+            uvicorn.run(app, host=config.get("host", "0.0.0.0"), port=port)
+            break
+        except SystemExit:
+            print("bind failed, retrying in 10s", flush=True)
+            time.sleep(10)
