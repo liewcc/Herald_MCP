@@ -764,7 +764,10 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
         reconnect.clear()
         peer_name = json.loads(CONFIG_PATH.read_text(encoding="utf-8")).get("name", cfg["name"])
         try:
-            with httpx.Client(timeout=None, headers=_auth()) as client:
+            # The relay sends ": keepalive" every 25s, so 60s of silence means a half-open
+            # connection (sleep/resume, Tailscale reconnect): ReadTimeout drops us into reconnect.
+            sse_timeout = httpx.Timeout(10.0, read=60.0)
+            with httpx.Client(timeout=sse_timeout, headers=_auth()) as client:
                 with client.stream("GET", url, params={"peer": peer_name}) as r:
                     msg_queue.put({"type": "status", "connected": True})
                     for line in r.iter_lines():
