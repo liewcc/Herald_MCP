@@ -1,7 +1,7 @@
 fastapi
 uvicorn[standard]
 httpx
-mcp
+mcp<2
 pystray
 pillow
 pywin32
