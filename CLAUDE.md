@@ -5,12 +5,52 @@ Agents communicate via a central relay server using MCP tools.
 
 ## Setup
 
-1. Copy `config.example.json` to `config.json` and set:
-   - `name` — this machine's peer name on the network
-   - `server_url` — URL of the relay server
-   - `token` — the relay's shared secret (same value on the relay and every peer)
-2. Configure your agent host (Claude Desktop, Cursor, etc.) to load `mcp_server.py` as an MCP server.
-3. On unattended peers, start `herald_tray.py` at boot — it maintains the persistent SSE connection.
+Humans: run `setup.bat` (installs Python if missing, pip deps, then the wizard). Never hand-edit
+`config.json` after the fact — rerun `python setup_wizard.py` instead.
+
+### AI installers — collect the answers BEFORE installing anything
+
+Ask the user these questions first, and do not start installing until every one is answered:
+
+1. **Role**: is this PC hosting the relay for a **new** network (`relay`), or **joining** an existing one (`join`)?
+2. **Peer name** for this PC (default: lower-case hostname).
+3. **Join only**: relay URL (`http://<relay Tailscale IP>:7700`) and the relay's **token**
+   (from the relay PC's `config.json`). A relay generates its own token.
+4. **Peers** this PC will talk to (comma-separated, may be empty).
+5. **Join only, if `config.json` already exists**: replace it, or add this relay as an extra
+   network (`--add-network LABEL`; needs `--peers`; the PC can then reach those peers but is only
+   *controlled* via its default network).
+6. **Autostart** at logon (unattended PC)? Default yes.
+
+Prerequisite for any cross-network setup: Tailscale installed and logged in on both PCs, and the
+relay PC visible from the joining PC in `tailscale status` (same tailnet, or the relay node shared
+to the joining PC's Tailscale account).
+
+Then run the wizard non-interactively with every answer as a flag (it fails fast instead of prompting):
+
+```
+python setup_wizard.py --role relay --name abby --peers cc --yes
+python setup_wizard.py --role join  --name leno --server-url http://100.x.x.x:7700 --token <hex> --peers April --yes
+```
+
+For `join` it checks the relay's `/health` with the token **before** writing `config.json`, and
+explains the failure (unreachable = Tailscale/share/relay down; 401 = wrong token). It then stops
+any running relay/tray from this checkout, writes the Startup-folder `herald_autostart.vbs`
+(relay via `python.exe` hidden console — never `pythonw`, uvicorn dies without a console; tray via
+`pythonw`), removes stale `herald_tray.lnk`/`run_shell_agent.vbs` entries that would start a
+duplicate tray, and starts Herald. `python setup_wizard.py --self-test` checks the wizard itself.
+
+Rules learned the hard way:
+- Run installs in a **real** shell on the target PC. A sandboxed desktop agent (e.g. the ChatGPT
+  app; `$env:LOCALAPPDATA` contains `\Packages\sandbox.`) cannot touch the real machine.
+- `schtasks /Create` needs admin on many PCs — that is why autostart uses the Startup folder.
+- One tray per peer: two subscribers make the relay's work queue drop `exec_shell` commands.
+  Don't also tick the tray UI's **Start on Login** (it adds `herald_tray.lnk` beside the VBS).
+- Write files with Python (`python -c` / the wizard), not PowerShell here-strings: a pasted
+  `'@ | Set-Content ...` line ends up inside the JSON.
+
+Controller PCs also register `mcp_server.py` with their agent host (Claude Desktop, Claude Code,
+Antigravity); `setup.bat` offers this.
 
 The relay (`server.py`) refuses to start without a token (`HERALD_TOKEN` env or `"token"` in its
 config.json) and returns 401 to any request whose `X-Herald-Token` header doesn't match.

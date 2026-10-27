@@ -193,7 +193,7 @@ These two processes serve opposite directions — one listens, one speaks.
 
 #### Starting
 
-Herald starts automatically on Windows startup after running `join.bat` or `setup.bat --install`.
+Herald starts automatically at logon after running `setup.bat` (or `setup_wizard.py`) with autostart on.
 
 To start it manually:
 ```
@@ -218,17 +218,23 @@ This immediately closes the SSE connection to the relay server. The machine will
 
 ---
 
-### For New Users — Join an Existing Network
+### Install — New Network or Join an Existing One
 
-> **You'll need the server address from your inviter.**
-> Python is automatically installed by `join.bat` if missing. Your peer name is set to your Windows hostname (`COMPUTERNAME`).
+Decide these **before** you start, so `config.json` is right the first time:
+
+- **New network** (this PC hosts the relay) or **join** an existing network?
+- Joining: the relay URL (`http://<relay Tailscale IP>:7700`) and its token (in the relay PC's `config.json`).
+- Tailscale installed and logged in on both PCs, with the relay PC visible in `tailscale status`
+  (same tailnet, or the relay node shared to your Tailscale account).
 
 1. Download the repository as ZIP (green **Code** button → **Download ZIP**) and extract it.
-2. Double-click `join.bat`.
-3. Paste the server address in the popup and click **OK**.
-4. Wait for installation to complete (success popup will appear).
-5. Restart **Claude Code** or **Antigravity**.
-6. Confirm with your AI assistant by calling `list_peers()`.
+2. Double-click `setup.bat`. It installs Python if missing, installs dependencies, then runs the wizard.
+3. Answer the wizard. When joining it tests the relay URL and token **before** writing anything,
+   and explains what to fix if the check fails. A new relay prints the URL and token the other PCs need.
+4. Restart **Claude Code** or **Antigravity** on PCs that control others.
+
+To change settings later, rerun `python setup_wizard.py` instead of editing `config.json`.
+AI installers: see the "AI installers" section in [CLAUDE.md](CLAUDE.md) for the non-interactive flags.
 
 ---
 
@@ -277,7 +283,7 @@ Herald operates under a shared-secret trust model. It implements the following s
 | `server.py` | Cloud server (central hub) |
 | `mcp_server.py` | Local MCP server (started automatically by your AI host) |
 | `herald_tray.py` | Windows system tray daemon with UI and Auto Reply |
-| `join.bat` | One-click setup for new users |
-| `setup.bat` | Manual setup for technical users |
+| `setup.bat` | Installer: Python, dependencies, then the setup wizard |
+| `setup_wizard.py` | Asks role/network/token first, verifies the relay, writes `config.json`, sets up autostart |
 | `server_deploy.ps1` | Deploy Herald to a new cloud server |
 | `config.example.json` | Configuration template |

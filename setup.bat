@@ -8,31 +8,51 @@ echo  Herald MCP Setup
 echo ============================================
 echo.
 
-echo [0/4] Checking config.json...
-if not exist "%~dp0config.json" (
-    echo   config.json not found. Creating one now.
-    echo.
-    set /p SERVER_URL="  Enter Herald server URL (e.g. http://202.59.9.164:7700): "
-    set /p PEER_NAME="  Enter a name for this machine (e.g. machine-b): "
-    python -c "import json,sys; cfg={'name':sys.argv[1],'server_url':sys.argv[2],'peers':['machine-a']}; open(sys.argv[3],'w',encoding='utf-8').write(json.dumps(cfg,indent=2))" "!PEER_NAME!" "!SERVER_URL!" "%~dp0config.json"
-    echo   [OK] config.json created.
-) else (
-    echo   [OK] config.json found.
-)
+echo Have these ready before you continue:
+echo   - Is this PC hosting the relay for a NEW network, or JOINING an existing one?
+echo   - Joining: the relay URL (http://^<relay Tailscale IP^>:7700) and its token.
+echo   - Tailscale installed and logged in, and the relay PC visible in `tailscale status`.
 echo.
-echo [1/4] Installing Python dependencies...
-pip install -r requirements.txt
-pip install pystray pillow pywin32
+
+echo [1/6] Checking Python...
+rem A Microsoft Store alias stub makes "python --version" fail, which correctly triggers the install.
+python --version >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo   Python not found. Installing Python 3.12 via winget...
+    rem --source winget skips the msstore source, whose terms prompt hangs non-interactive shells.
+    winget install --id Python.Python.3.12 --source winget --scope user --accept-source-agreements --accept-package-agreements
+    for /f "tokens=*" %%p in ('powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','User')"') do set "PATH=%%p;!PATH!"
+    python --version >nul 2>&1
+    if !ERRORLEVEL! neq 0 (
+        echo   ERROR: Python install failed. Install Python 3.12 from python.org, reopen this window, rerun.
+        pause
+        exit /b 1
+    )
+)
+echo   [OK] Python ready.
+
+echo.
+echo [2/6] Installing Python dependencies...
+python -m pip install -r "%~dp0requirements.txt"
 if %ERRORLEVEL% neq 0 (
     echo.
     echo ERROR: pip install failed.
-    echo Make sure Python 3.10+ is installed and added to PATH.
     pause
     exit /b 1
 )
 
 echo.
-echo [1b/4] Installing windows-mcp (Claude Desktop remote control)...
+echo [3/6] Herald configuration wizard...
+python "%~dp0setup_wizard.py"
+if %ERRORLEVEL% neq 0 (
+    echo.
+    echo Wizard did not finish - nothing further was installed. Fix the issue above and rerun setup.bat.
+    pause
+    exit /b 1
+)
+
+echo.
+echo [4/6] Installing windows-mcp (Claude Desktop remote control)...
 pip show windows-mcp >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     echo   [OK] windows-mcp already installed.
@@ -67,7 +87,7 @@ else:
 " "%~dp0mcp_server.py"
 
 echo.
-echo [2/5] Registering with Claude Code...
+echo [5/6] Registering with Claude Code...
 where claude >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo   WARNING: claude CLI not found in PATH.
@@ -101,7 +121,7 @@ if %ERRORLEVEL% equ 0 (
 
 :register_antigravity
 echo.
-echo [3/5] Registering with Antigravity...
+echo [6/6] Registering with Antigravity...
 set "AGY_FOUND="
 if exist "%LOCALAPPDATA%\agy\bin\agy.exe"                              set "AGY_FOUND=1"
 if exist "%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe"         set "AGY_FOUND=1"
@@ -121,76 +141,18 @@ if not defined AGY_FOUND (
     echo     }
     echo   }
     goto :done
-)
-
-python -c "import json,os; paths=[os.path.expandvars(r'%%USERPROFILE%%/.gemini/config/mcp_config.json'), os.path.expandvars(r'%%USERPROFILE%%/.gemini/antigravity/mcp_config.json')]; exit(0 if all(os.path.exists(p) and 'herald' in json.load(open(p,encoding='utf-8')).get('mcpServers',{}) for p in paths) else 1)" >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo   [OK] herald is already registered with Antigravity.
-    goto :done
-)
-
-set /p REGISTER_AGY="  Register herald with Antigravity now? (y/n): "
-if /i not "%REGISTER_AGY%"=="y" (
-    echo   Skipped. Run manually when ready.
-    goto :done
-)
-
-python -c "import os; f=open(os.path.expandvars(r'%%TEMP%%\herald_mcp_register.py'), 'w', encoding='utf-8'); f.write('import sys, os, json\npaths = [os.path.expandvars(r\'%%USERPROFILE%%/.gemini/config/mcp_config.json\'), os.path.expandvars(r\'%%USERPROFILE%%/.gemini/antigravity/mcp_config.json\')]\nfor p in paths:\n    os.makedirs(os.path.dirname(p), exist_ok=True)\n    d = {}\n    if os.path.exists(p):\n        try:\n            with open(p, encoding=\'utf-8\') as f: d = json.load(f)\n        except: pass\n    if \'mcpServers\' not in d: d[\'mcpServers\'] = {}\n    d[\'mcpServers\'][\'herald\'] = {\'command\': \'python\', \'args\': [sys.argv[1]]}\n    with open(p, \'w\', encoding=\'utf-8\') as f: json.dump(d, f, indent=2)\n')"
-python "%TEMP%\herald_mcp_register.py" "%~dp0mcp_server.py"
-if exist "%TEMP%\herald_mcp_register.py" del "%TEMP%\herald_mcp_register.py"
-if %ERRORLEVEL% neq 0 (
-    echo   WARNING: Could not write config. Check %%USERPROFILE%%\.gemini\config\mcp_config.json and %%USERPROFILE%%\.gemini\antigravity\mcp_config.json
-    goto :done
-)
-
-python -c "import json,os; paths=[os.path.expandvars(r'%%USERPROFILE%%/.gemini/config/mcp_config.json'), os.path.expandvars(r'%%USERPROFILE%%/.gemini/antigravity/mcp_config.json')]; exit(0 if all(os.path.exists(p) and 'herald' in json.load(open(p,encoding='utf-8')).get('mcpServers',{}) for p in paths) else 1)" >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo   [OK] herald registered successfully with Antigravity.
-) else (
-    echo   WARNING: Could not verify. Check %%USERPROFILE%%\.gemini\config\mcp_config.json and %%USERPROFILE%%\.gemini\antigravity\mcp_config.json
-)
-
-:done
-echo.
-echo [4/5] Installing Herald tray daemon...
-python "%~dp0herald_tray.py" --install
-if %ERRORLEVEL% neq 0 (
-    echo   WARNING: Could not install startup shortcut. Run manually:
-    echo     python "%~dp0herald_tray.py" --install
-) else (
-    echo   [OK] Herald tray will start automatically at logon.
-)
-
 echo.
 echo   Creating desktop shortcut...
 python -c "import sys,win32com.client,os; q=chr(34); d=os.path.join(os.path.expanduser('~'),'Desktop'); p=sys.argv[1]; ico=sys.argv[2]; lnk_path=os.path.join(d,'Herald MCP.lnk'); wsh=win32com.client.Dispatch('WScript.Shell'); s=wsh.CreateShortcut(lnk_path); s.TargetPath=sys.executable; s.Arguments=q+p+q; s.WorkingDirectory=os.path.dirname(p); s.IconLocation=ico; s.Description='Herald MCP Tray'; s.Save(); print('  [OK] Shortcut: '+lnk_path)" "%~dp0herald_tray.py" "%~dp0img\logo.ico"
 
 echo.
-echo   Starting Herald tray now...
-for /f "delims=" %%p in ('python -c "import sys,os; print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))"') do start "" "%%p" "%~dp0herald_tray.py"
-
-echo.
-echo [5/5] Installing shell_agent to run silently at logon...
-for /f "delims=" %%p in ('python -c "import sys,os; print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))"') do set "PYTHONW=%%p"
-set "AGENT_PATH=%~dp0shell_agent.py"
-set "VBS_PATH=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\run_shell_agent.vbs"
-python -c "import sys; q=chr(34); p=sys.argv[1]; a=sys.argv[2]; v=sys.argv[3]; open(v,'w').write('Set o=CreateObject('+q+'WScript.Shell'+q+')\r\no.Run '+q+q+q+p+q+q+' '+q+q+a+q+q+q+', 0, False\r\n')" "%PYTHONW%" "%AGENT_PATH%" "%VBS_PATH%"
-if %ERRORLEVEL% equ 0 (
-    echo   [OK] run_shell_agent.vbs installed to Startup folder (silent, no admin needed).
-) else (
-    echo   WARNING: Could not write VBS. Create manually at: %VBS_PATH%
-)
-echo   Starting shell_agent now...
-start "" "%PYTHONW%" "%AGENT_PATH%"
-
-echo.
 echo ============================================
-echo  Setup complete!
+echo  Setup complete! The wizard already started Herald.
 echo.
 echo  Next steps:
-echo  1. Edit config.json -- fill in server_url and your machine name.
-echo  2. Restart Claude Code (or Antigravity) to load the herald MCP.
-echo  3. Look for the Herald icon in the system tray (bottom-right).
+echo  1. Restart Claude Code (or Antigravity) on PCs that control others.
+echo  2. From the controlling PC, verify with exec_shell(peer_name, "hostname").
+echo  3. Settings changed later? Rerun setup_wizard.py instead of editing config.json.
 echo ============================================
 echo.
 pause
