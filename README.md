@@ -224,11 +224,13 @@ Decide these **before** you start, so `config.json` is right the first time:
 
 - **New network** (this PC hosts the relay) or **join** an existing network?
 - Joining: the relay URL (`http://<relay Tailscale IP>:7700`) and its token (in the relay PC's `config.json`).
-- Tailscale installed and logged in on both PCs, with the relay PC visible in `tailscale status`
-  (same tailnet, or the relay node shared to your Tailscale account).
+- A Tailscale account to log in with on every PC. The relay PC must end up visible in `tailscale status`
+  (same Tailscale account, or the relay node shared to your account).
 
 1. Download the repository as ZIP (green **Code** button → **Download ZIP**) and extract it.
-2. Double-click `setup.bat`. It installs Python if missing, installs dependencies, then runs the wizard.
+2. Double-click `setup.bat`. It checks git, Python and Tailscale and installs whatever is missing (via winget;
+   approve the Windows admin prompt for Tailscale), installs the Python dependencies, logs you in to
+   Tailscale if needed, then runs the wizard.
 3. Answer the wizard. When joining it tests the relay URL and token **before** writing anything,
    and explains what to fix if the check fails. A new relay prints the URL and token the other PCs need.
 4. Restart **Claude Code** or **Antigravity** on PCs that control others.

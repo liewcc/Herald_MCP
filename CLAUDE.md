@@ -5,7 +5,7 @@ Agents communicate via a central relay server using MCP tools.
 
 ## Setup
 
-Humans: run `setup.bat` (installs Python if missing, pip deps, then the wizard). Never hand-edit
+Humans: run `setup.bat` (installs git, Python and Tailscale if missing, pip deps, Tailscale login, then the wizard). Never hand-edit
 `config.json` after the fact — rerun `python setup_wizard.py` instead.
 
 ### AI installers — follow these steps in order
@@ -52,25 +52,35 @@ When you install the **relay** yourself, the opposite applies: give the user the
 from the wizard output and tell them to paste both to whoever (or whichever AI) installs the
 other PCs.
 
-**Step 2 — Tailscale. The user does the browser parts; you verify.** You cannot log in or click
-Share for them. Ask them to, on every PC:
-- install Tailscale (https://tailscale.com/download) and log in;
+**Step 2 — Install the prerequisites: git, the code, Python, Tailscale, dependencies.**
+- git: `git --version`. If missing:
+  `winget install --id Git.Git --source winget --accept-source-agreements --accept-package-agreements`,
+  then open a new shell (PATH is stale in the current one).
+- The code: `git clone https://github.com/liewcc/Herald_MCP.git C:\AI\Herald_MCP` (or copy the folder).
+- Everything else in one call — it checks each item and installs only what is missing, without prompting:
+
+  ```
+  cmd /c "call C:\AI\Herald_MCP\setup.bat --prereqs"
+  ```
+
+  It installs Python 3.12 (user scope) and Tailscale via winget, reloads PATH itself, runs
+  `pip install -r requirements.txt`, and ends with `[OK] Prerequisites ready.` (exit code 0). A
+  non-zero exit means Python or pip failed — read the `ERROR:` line. Tailscale installs
+  machine-wide, so **Windows shows an admin prompt on the desktop: ask the user to click Yes**, or
+  the step waits. If winget itself is missing, the output says which tool to install by hand.
+  All installs use `--source winget`: the default msstore source asks to accept terms and hangs a
+  non-interactive shell.
+- If it prints `Tailscale is installed but not logged in`, that is expected on a fresh PC — Step 3.
+
+**Step 3 — Tailscale login and sharing. The user does the browser parts; you verify.** You cannot
+log in or click Share for them. Ask them to, on every PC:
+- log in to Tailscale (tray icon > Log in, or run `tailscale up` and open the link it prints);
 - make the PCs see each other: log every PC into the same Tailscale account, or have the relay PC's
   owner open https://login.tailscale.com/admin/machines, click `...` on the relay machine > Share,
   and send the link to the other PC's account to accept.
 
 Then check yourself: `tailscale ip -4` prints this PC's `100.x.x.x` address, and on a joining PC
 `tailscale status` lists the relay PC's address. Do not continue until both hold.
-
-**Step 3 — Python, the code, dependencies.**
-- `python --version`. If it fails (missing, or the Microsoft Store alias stub), install with
-  `winget install --id Python.Python.3.12 --source winget --scope user --accept-source-agreements --accept-package-agreements`.
-  `--source winget` matters: the default msstore source asks to accept terms and hangs a
-  non-interactive shell. The current shell's PATH is stale afterwards: open a new shell, or call
-  `%LOCALAPPDATA%\Programs\Python\Python312\python.exe` directly.
-- Put the repo in place (e.g. `C:\AI\Herald_MCP`, by `git clone` or copying the folder).
-- `python -m pip install -r requirements.txt` in that folder. The wizard itself is stdlib-only,
-  but the relay and tray it starts need these packages.
 
 **Step 4 — Run the wizard with every answer as a flag.** With `--yes` it never prompts; a missing
 answer makes it exit with `ERROR: no answer for '...'` instead of hanging.
@@ -86,6 +96,17 @@ python setup_wizard.py --role join  --name leno --server-url http://100.x.x.x:77
 python setup_wizard.py --role join  --name cc   --server-url http://100.x.x.x:7700 --token <hex> --peers abby --add-network abby --yes
 ```
 
+Most robust: run the same flags **through setup.bat**, so a just-installed Python and a fresh PATH
+are used. It re-checks the prerequisites (fast once installed), passes the flags to the wizard,
+and skips its Claude/Antigravity questions because stdin is empty:
+
+```
+cmd /c "call C:\AI\Herald_MCP\setup.bat --role join --name leno --server-url http://100.x.x.x:7700 --token <hex> --yes <NUL"
+```
+
+Do this only after Step 3: if Tailscale is not logged in, a full `setup.bat` run starts
+`tailscale up` and waits for the browser login.
+
 What it does: for `join` it checks the relay's `/health` with the token **before** writing
 `config.json`. It backs up an existing (even corrupt) `config.json` to `config.json.bak`, stops any
 relay/tray already running from this checkout (never `mcp_server.py`), writes the Startup-folder
@@ -100,7 +121,7 @@ entries that would start a duplicate tray, and starts Herald.
 | relay: `[OK] Relay running` + `role = join, URL = http://<ip>:7700, token = <token>` | Success. Give URL and token to the user for the other PCs — privately, the token is the only lock. |
 | join: `Relay check: OK` then `[OK] Herald started` | Success. |
 | `Relay check failed: bad-token` | Wrong token — copy it again from the relay PC. |
-| `Relay check failed: unreachable (...)` | Back to Step 2 (Tailscale login / Share), or the relay PC is off. |
+| `Relay check failed: unreachable (...)` | Back to Step 3 (Tailscale login / Share), or the relay PC is off. |
 | relay: `ERROR: relay check on port 7700 failed (...)` | Run `python server.py` in a console to see the error; `bad-token` there means another relay already holds port 7700. |
 | peers can't connect to a working relay | Allow inbound TCP 7700 in Windows Firewall on the relay PC. |
 
@@ -110,8 +131,14 @@ that PC's hostname. If it times out intermittently, check for two trays on the p
 and rerun the wizard, which leaves exactly one.
 
 **Step 6 — Controller PCs only:** register `mcp_server.py` with the agent host and restart it —
-Claude Code: `claude mcp add herald -- python <repo>\mcp_server.py`; Claude Desktop: add it under
-`mcpServers` in `claude_desktop_config.json`. (`setup.bat` offers Claude Code and Antigravity.)
+Claude Code: `claude mcp add herald -- <python.exe> <repo>\mcp_server.py`; Claude Desktop: add it
+under `mcpServers` in `claude_desktop_config.json`. Use the **full path** of the python.exe that
+has Herald's dependencies (`python -c "import sys; print(sys.executable)"`), not a bare `python` —
+a PC can have several installs. (A full interactive `setup.bat` run offers Claude Code and
+Antigravity and does this for you.)
+
+`windows-mcp` (remote desktop control for `ask_peer`, as on April) is optional and must live in
+its **own** environment (e.g. a separate venv): it pulls `mcp` 2.x, and `mcp_server.py` needs `mcp<2`.
 
 **Changing settings later:** rerun the wizard with new flags — never hand-edit `config.json`.
 A relay rerun keeps its token, so connected peers stay connected.
