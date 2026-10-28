@@ -43,9 +43,14 @@ assert herald_tray.node_state("April", {"up": True, "online": ["leno"]}) == "off
 assert herald_tray.node_state("April", {"up": True, "online": None}) == "unknown"     # old relay
 assert herald_tray.node_state("April", {"up": False, "online": None}) == "unknown"    # relay down
 herald_tray.httpx.get = lambda url, **kw: mcp_server.httpx.Response(
-    200, json={"online": ["leno"]}, request=mcp_server.httpx.Request("GET", url))
+    200, json={"online": ["leno"], "name": "April"}, request=mcp_server.httpx.Request("GET", url))
 assert herald_tray.probe_relay(cfg)["online"] == ["leno"]
+assert herald_tray.relay_host(cfg, herald_tray.probe_relay(cfg), {}) == "April"      # relay names itself
 herald_tray.httpx.get = lambda url, **kw: (_ for _ in ()).throw(OSError("down"))
-assert herald_tray.probe_relay(cfg) == {"up": False, "ms": None, "online": None}
+down = herald_tray.probe_relay(cfg)
+assert down == {"up": False, "ms": None, "online": None, "host": None}
+net = {"server_url": "http://100.104.102.15:7700"}
+assert herald_tray.relay_host(net, down, {"abby": "100.104.102.15"}) == "abby"       # down: IP lookup
+assert herald_tray.relay_host(net, down, {}) is None
 
 print("ok")

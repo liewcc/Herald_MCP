@@ -88,9 +88,19 @@ def probe_relay(net: dict) -> dict:
         r = httpx.get(net["server_url"].rstrip("/") + "/health", timeout=3.0,
                       headers={"X-Herald-Token": net.get("token", "")})
         r.raise_for_status()
-        return {"up": True, "ms": int((time.monotonic() - t0) * 1000), "online": r.json().get("online")}
+        body = r.json()
+        return {"up": True, "ms": int((time.monotonic() - t0) * 1000),
+                "online": body.get("online"), "host": body.get("name")}
     except Exception:
-        return {"up": False, "ms": None, "online": None}
+        return {"up": False, "ms": None, "online": None, "host": None}
+
+
+def relay_host(net: dict, probe: dict, ips: dict) -> str | None:
+    """Which PC runs this relay: its own /health name, else the peer whose IP matches the relay URL."""
+    if probe.get("host"):
+        return probe["host"]
+    ip = net["server_url"].split("//")[-1].split(":")[0]
+    return next((peer for peer, addr in ips.items() if addr == ip), None)
 
 
 def node_state(peer: str, probe: dict) -> str:
@@ -445,7 +455,7 @@ class HeraldWindow:
         tk.Label(toolbar, text="Click a PC to open it in Remote Tasks",
                  font=("Segoe UI", 8), fg="#888").pack(side="right")
 
-        self.net_canvas = tk.Canvas(frame, bg="#0f0f0f", highlightthickness=0)
+        self.net_canvas = tk.Canvas(frame, bg="#ffffff", highlightthickness=0)
         self.net_canvas.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self.net_canvas.bind("<Configure>", lambda e: self._draw_network())
         self.nb.bind("<<NotebookTabChanged>>",
@@ -478,7 +488,7 @@ class HeraldWindow:
         col = w / len(self._net_probes)
         ring = max(40, min(col * 0.32, (h - 160) / 2))   # leaves room for labels + status line
         ips = self.cfg.get("ips", {})
-        green, grey, red, blue, text = "#22bb44", "#666666", "#cc3333", "#3388ff", "#cccccc"
+        green, grey, red, blue, text = "#22aa44", "#a0a0a0", "#cc3333", "#2a6fdb", "#333333"
 
         for i, (net, probe) in enumerate(self._net_probes):
             cx, cy = col * i + col / 2, 64 + ring
@@ -494,8 +504,8 @@ class HeraldWindow:
                               dash=() if state == "online" else (3, 3), width=2)
                 tag = f"peer-{i}-{j}"
                 c.create_oval(x - 14, y - 14, x + 14, y + 14, tags=tag,
-                              fill={"online": green, "offline": grey}.get(state, "#0f0f0f"),
-                              outline="#ffffff" if peer == net["name"] else grey,
+                              fill={"online": green, "offline": grey}.get(state, "#ffffff"),
+                              outline="#222222" if peer == net["name"] else grey,
                               width=3 if peer == net["name"] else 1)
                 if state == "unknown":
                     c.create_text(x, y, text="?", fill=grey, font=("Segoe UI", 10, "bold"), tags=tag)
@@ -509,10 +519,14 @@ class HeraldWindow:
                     c.tag_bind(tag, "<Leave>", lambda e: c.config(cursor=""))
 
             # relay box goes on top of the spokes
+            # the relay is a program on one of the peers, not a separate box: name its host
             colr = blue if probe["up"] else red
-            c.create_rectangle(cx - 34, cy - 15, cx + 34, cy + 15, fill="#1a1a1a", outline=colr,
+            host_pc = relay_host(net, probe, ips)
+            c.create_rectangle(cx - 52, cy - 18, cx + 52, cy + 18, fill="#f2f6fc", outline=colr,
                                width=2, dash=() if probe["up"] else (4, 3))
-            c.create_text(cx, cy, text="relay", fill=colr, font=("Segoe UI", 9, "bold"))
+            c.create_text(cx, cy - (6 if host_pc else 0), text="relay", fill=colr, font=("Segoe UI", 9, "bold"))
+            if host_pc:
+                c.create_text(cx, cy + 8, text=f"runs on {host_pc}", fill=colr, font=("Segoe UI", 8))
             if not probe["up"]:
                 status = "relay unreachable"
             elif probe["online"] is None:
@@ -522,7 +536,7 @@ class HeraldWindow:
             c.create_text(cx, h - 34, text=status, fill=colr, font=("Segoe UI", 9))
 
         c.create_text(w / 2, h - 12, fill=grey, font=("Segoe UI", 8),
-                      text="●green online   ●grey offline   ○? unknown   white ring = this PC")
+                      text="●green online   ●grey offline   ○? unknown   dark ring = this PC")
 
     def _open_in_tasks(self, peer: str):
         self._tasks_peer.set(peer)
