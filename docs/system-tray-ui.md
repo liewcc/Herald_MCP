@@ -12,30 +12,30 @@
 | **Messages** | Incoming messages and file deposits from peers, as they arrive over SSE. |
 | **Comm Log** | The full two-way log from `herald_comm.log`: every `exec_shell` and `ask_peer` sent or received. |
 | **Remote Tasks** | Run a preset (or typed) command on a peer and see its output, e.g. which `claude` / `python` processes are running there. Each peer is reached through the relay of the network it belongs to. |
-| **Network** | Which PCs are connected right now, one diagram per relay (see below). |
+| **Network** | Which PCs are connected right now, one graph of every relay (see below). |
 
 ## Network tab
 
 ![Network tab](img/network-tab.png)
 
-Each relay in `config.json` (the top level plus every entry under `networks`) gets its own diagram. The relay is a program running on one of the PCs, so that PC sits in the middle with a coloured **relay band** across the top of its card; the network's other PCs are placed around it. The host appears only once.
+One graph for all relays in `config.json` (the top level plus every entry under `networks`). This PC sits at the top, once, with a line to every relay it uses. A relay is a program running on one of the PCs, so that PC carries a coloured **relay band** across the top of its card and shows the relay address as `IP:port`, and the network's other PCs hang below it.
 
 | Mark | Meaning |
 |------|---------|
-| `online` under a green box, solid line | The PC's tray holds a live connection to this relay |
-| `offline` under a grey box, dashed line | No tray connected from that PC |
-| `unknown` under a white dashed box | The relay is unreachable, or runs an older `server.py` that does not report who is online |
+| Green box, solid line | Online: the PC's tray holds a live connection to this relay |
+| Grey box, dashed line | Offline: no tray connected from that PC |
+| Pink box | Unknown: the relay is unreachable, or runs an older `server.py` that does not report who is online |
 | `· this PC` after the name | This PC: online whenever any relay answers |
 | Blue band, `relay · N ms` | The relay is up, running on that PC |
-| Red band, `relay unreachable` | The relay cannot be reached; every line to it is grey |
+| Red band, `relay · down` | The relay cannot be reached; every line to it is grey |
 | Plain "relay" box in the middle | The relay's host PC could not be identified (see [Showing IP addresses](#showing-ip-addresses)) |
 
-Below each diagram: the round-trip time to the relay and how many of its peers are online.
+The legend under the graph repeats the three box colours.
 
 - **Click a PC** to jump to Remote Tasks with that peer selected.
 - The tab refreshes when you open it, then every 15 seconds while it stays open. Nothing is polled while the window is hidden.
 - Peers come from each network's `peers` list in `config.json`. A PC that is connected but missing from that list will not be drawn.
-- This PC's tray subscribes only to the **top-level** relay: peers in other networks cannot send commands to it, but it can still send to them. The diagram therefore shows it online in every network whose relay answers.
+- This PC's tray subscribes only to the **top-level** relay: peers in other networks cannot send commands to it, but it can still send to them. The graph therefore draws it online, with a solid line to every relay that answers.
 
 ### Relay pills in the title bar
 

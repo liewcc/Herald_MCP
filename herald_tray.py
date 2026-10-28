@@ -121,17 +121,9 @@ def relay_host(net: dict, probe: dict, ips: dict) -> str | None:
 # Network tab palette: (fill, outline, text) per node state
 NODE = {"online": ("#E1F5EE", "#1D9E75", "#085041"),
         "offline": ("#F1EFE8", "#B4B2A9", "#5F5E5A"),
-        "unknown": ("#FFFFFF", "#B4B2A9", "#5F5E5A")}
+        "unknown": ("#FBEAF0", "#D4537E", "#72243E")}
 PILL_UP, PILL_DOWN = NODE["online"], ("#FCEBEB", "#A32D2D", "#791F1F")
-INK, MUTED, RELAY, DOWN ="#222222", "#888780", "#185FA5", "#A32D2D"
-
-
-def split_members(net: dict, host_pc: str | None) -> tuple:
-    """(center, around): the relay host sits in the middle and is not drawn again in the ring."""
-    members = [net["name"]] + [p for p in net.get("peers", []) if p != net["name"]]
-    if not host_pc:
-        return None, members
-    return host_pc, [p for p in members if p != host_pc]
+MUTED, RELAY, DOWN = "#888780", "#185FA5", "#A32D2D"
 
 
 def round_rect(c, x0, y0, x1, y1, r, **kw):
@@ -536,52 +528,62 @@ class HeraldWindow:
         w, h = c.winfo_width(), c.winfo_height()
         if not self._net_probes or w < 50:
             return
+        # one graph: this PC once at the top, a line to each relay it uses, each relay's other PCs hanging below it
         col = w / len(self._net_probes)
-        # an oval ring: wider than tall, so side nodes clear the relay host in the center
-        rx, ry = max(100, min(col * 0.38, 220)), max(60, (h - 170) / 2)
+        me = self.cfg.get("name", "")
+        mx, my = w / 2, 45
+        ry = my + 95                       # relay row
+        rx, dy = min(col * 0.38, 200), max(90, h - ry - 80)
         # my_ip() is already cached: the probe thread asked it before any result could reach here
-        ips = {**self.cfg.get("ips", {}), self.cfg.get("name", ""): my_ip()}
+        ips = {**self.cfg.get("ips", {}), me: my_ip()}
         self._me_up = any(p["up"] for _, p in self._net_probes)
 
+        def link(x0, y0, x1, y1, online):
+            c.create_line(x0, y0, x1, y1, fill=NODE["online"][1] if online else NODE["offline"][1],
+                          dash=() if online else (4, 4), width=2 if online else 1.5)
+
+        layout, me_band = [], None
         for i, (net, probe) in enumerate(self._net_probes):
-            cx, cy = col * i + col / 2, 70 + ry
-            c.create_text(cx, 18, text=net["server_url"].split("//")[-1], fill=INK, font=("Segoe UI", 10, "bold"))
-            host_pc = relay_host(net, probe, ips)
-            center, around = split_members(net, host_pc)
-            relay_col = RELAY if probe["up"] else DOWN
-
-            for j, peer in enumerate(around):
-                a = 2 * math.pi * j / len(around) - math.pi / 2
-                x, y = cx + rx * math.cos(a), cy + ry * math.sin(a)
-                # a dead relay carries nothing, so every link to it is grey even when the PC itself is up
-                online = probe["up"] and node_state(peer, probe, net["name"], self._me_up) == "online"
-                c.create_line(cx, cy, x, y, fill=NODE["online"][1] if online else NODE["offline"][1],
-                              dash=() if online else (4, 4), width=2 if online else 1.5)
-            for j, peer in enumerate(around):
-                a = 2 * math.pi * j / len(around) - math.pi / 2
-                self._draw_node(c, cx + rx * math.cos(a), cy + ry * math.sin(a), peer, net, probe,
-                                ips.get(peer, ""), f"peer-{i}-{j}")
-
-            if center:
-                # the relay is a program on this PC: the PC sits in the middle, the relay is a band on its card
-                band = f"relay · {probe['ms']} ms" if probe["up"] else "relay unreachable"
-                self._draw_node(c, cx, cy, center, net, probe, ips.get(center, ""), f"host-{i}",
-                                band=(band, relay_col))
-            else:   # host unknown: say only that a relay is there
-                c.create_rectangle(cx - 40, cy - 16, cx + 40, cy + 16, fill="#ffffff", outline=relay_col,
-                                   width=2, dash=() if probe["up"] else (4, 3))
-                c.create_text(cx, cy, text="relay", fill=relay_col, font=("Segoe UI", 9, "bold"))
-
-            everyone = ([center] if center else []) + around
-            if not probe["up"]:
-                status = "relay unreachable"
-            elif probe["online"] is None:
-                status = f"{probe['ms']} ms · old relay, no peer list"
+            host = relay_host(net, probe, ips)
+            band = (f"relay · {probe['ms']} ms" if probe["up"] else "relay · down",
+                    RELAY if probe["up"] else DOWN)
+            # the relay is a program on a PC: that PC carries the band, so a relay on this PC sits on my card
+            rx0, ry0 = (mx, my) if host == me else (col * i + col / 2, ry)
+            if host == me:
+                me_band = band
             else:
-                up = sum(node_state(p, probe, net["name"], self._me_up) == "online" for p in everyone)
-                status = f"{probe['ms']} ms · {up}/{len(everyone)} online"
-            c.create_text(cx, h - 16, text=status, fill=relay_col, font=("Segoe UI", 9))
+                link(mx, my, rx0, ry0, probe["up"])
+            others = [p for p in net.get("peers", []) if p not in (me, host)]
+            spots = []
+            for j, peer in enumerate(others):
+                # spread on a downward arc, left to right
+                a = math.pi / 2 if len(others) == 1 else math.pi * (0.75 - 0.5 * j / (len(others) - 1))
+                x, y = rx0 + rx * math.cos(a), ry0 + dy * math.sin(a)
+                # a dead relay carries nothing, so every link to it is grey even when the PC itself is up
+                link(rx0, ry0, x, y, probe["up"] and node_state(peer, probe) == "online")
+                spots.append((peer, x, y))
+            layout.append((net, probe, host, band, rx0, ry0, spots))
 
+        for i, (net, probe, host, band, rx0, ry0, spots) in enumerate(layout):
+            for j, (peer, x, y) in enumerate(spots):
+                self._draw_node(c, x, y, peer, net, probe, ips.get(peer, ""), f"peer-{i}-{j}")
+            if host and host != me:   # the host's address is the relay's: show it as IP:port
+                self._draw_node(c, rx0, ry0, host, net, probe, net["server_url"].split("//")[-1].rstrip("/"),
+                                f"host-{i}", band=band)
+            elif not host:   # host unknown: say only that a relay is there
+                c.create_rectangle(rx0 - 58, ry0 - 16, rx0 + 58, ry0 + 16, fill="#ffffff", outline=band[1],
+                                   width=2, dash=() if probe["up"] else (4, 3))
+                c.create_text(rx0, ry0, text=band[0], fill=band[1], font=("Segoe UI", 8, "bold"))
+        net0, probe0 = self._net_probes[0]
+        me_addr = next((n["server_url"].split("//")[-1].rstrip("/") for n, _, h, *_ in layout if h == me), None)
+        self._draw_node(c, mx, my, me, net0, probe0, me_addr or ips.get(me, ""), "me", band=me_band)
+
+        x = w / 2 - 110   # legend: the card colours
+        for state in ("online", "offline", "unknown"):
+            fill, edge, _ = NODE[state]
+            c.create_rectangle(x, h - 22, x + 10, h - 12, fill=fill, outline=edge)
+            x = c.bbox(c.create_text(x + 16, h - 17, text=state, anchor="w", fill=MUTED,
+                                     font=("Segoe UI", 8)))[2] + 24
 
     def _draw_node(self, c, x, y, peer, net, probe, sub, tag, band=None):
         state = node_state(peer, probe, net["name"], self._me_up)
@@ -589,9 +591,7 @@ class HeraldWindow:
         me = peer == net["name"]
         x, y = round(x), round(y)   # see round_rect
         hw, hh = (58, 33) if band else (46, 22)
-        c.create_text(x - hw + 2, y + hh + 2, text=state, anchor="nw", fill=MUTED, font=("Segoe UI", 8))
-        round_rect(c, x - hw, y - hh, x + hw, y + hh, 9, tags=tag, fill=fill,
-                   outline=edge, dash=(4, 3) if state == "unknown" else ())
+        round_rect(c, x - hw, y - hh, x + hw, y + hh, 9, tags=tag, fill=fill, outline=edge)
         if band:
             # rounded top, square bottom: tk's smooth polygon keeps a corner sharp where a point is tripled
             x0, y0, x1, yb, r = x - hw, y - hh, x + hw, y - hh + 18, 9
@@ -824,7 +824,7 @@ class HeraldWindow:
         x = 2
         for i, (net, probe) in enumerate(probes):
             # the top-level pill follows the tray's own subscription: green there means commands can reach this PC
-            up = self._subscribed if i == 0 else probe["up"]
+            up = probe["up"] if i or self._subscribed is None else self._subscribed
             fill, edge, ink = (PILL_UP if up else PILL_DOWN) if up is not None else NODE["unknown"]
             host = net["server_url"].split("//")[-1]
             label = relay_host(net, probe, ips) or host.split(":")[0]
