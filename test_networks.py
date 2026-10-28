@@ -52,5 +52,10 @@ assert down == {"up": False, "ms": None, "online": None, "host": None}
 net = {"server_url": "http://100.104.102.15:7700"}
 assert herald_tray.relay_host(net, down, {"abby": "100.104.102.15"}) == "abby"       # down: IP lookup
 assert herald_tray.relay_host(net, down, {}) is None
+# The relay host is drawn once, in the middle, never again in the ring.
+april = {"name": "cc", "peers": ["April", "leno", "dv"]}
+assert herald_tray.split_members(april, "April") == ("April", ["cc", "leno", "dv"])
+assert herald_tray.split_members({"name": "April", "peers": ["cc"]}, "April") == ("April", ["cc"])
+assert herald_tray.split_members(april, None) == (None, ["cc", "April", "leno", "dv"])
 
 print("ok")

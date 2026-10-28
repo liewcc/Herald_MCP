@@ -240,7 +240,7 @@ Restart Claude Code (or Antigravity) so it loads the Herald tools.
 ### Check That It Works
 
 - A Herald icon is in the Windows system tray of every PC. Open it, go to the **Network** tab: each PC
-  that is running should be a green dot (see [System Tray UI](docs/system-tray-ui.md)).
+  that is running should be a green box (see [System Tray UI](docs/system-tray-ui.md)).
 - From a controller PC, ask the AI: *"Use exec_shell to run `hostname` on leno."* It should answer with
   that PC's computer name.
 - For a PC with Claude Code and **Auto Reply** on: *"Use ask_peer to ask leno what day it is."* Its Claude

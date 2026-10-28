@@ -18,16 +18,17 @@
 
 ![Network tab](img/network-tab.png)
 
-Each relay in `config.json` (the top level plus every entry under `networks`) gets its own star diagram, with the relay in the middle and that network's peers around it.
+Each relay in `config.json` (the top level plus every entry under `networks`) gets its own diagram. The relay is a program running on one of the PCs, so that PC sits in the middle, labelled **relay host** and circled by a dashed ring; the network's other PCs are placed around it. The host appears only once.
 
 | Mark | Meaning |
 |------|---------|
-| Green dot, solid line | Online: the peer's tray holds a live connection to this relay |
-| Grey dot, dotted line | Offline: no tray connected from that PC |
-| Hollow dot with `?` | Unknown: the relay is unreachable, or runs an older `server.py` that does not report who is online |
-| Dark ring | This PC |
-| Blue box, "runs on X" | The relay is up; X is the PC that hosts it |
-| Red dashed box | The relay cannot be reached |
+| Green box, solid line | Online: the PC's tray holds a live connection to this relay |
+| Grey box, dashed line | Offline: no tray connected from that PC |
+| White dashed box, name with `?` | Unknown: the relay is unreachable, or runs an older `server.py` that does not report who is online |
+| Dark outline | This PC |
+| Blue dashed ring | The relay is up, running on the PC inside the ring |
+| Red dashed ring | The relay cannot be reached |
+| Plain "relay" box in the middle | The relay's host PC could not be identified (see [Showing IP addresses](#showing-ip-addresses)) |
 
 Below each diagram: the round-trip time to the relay and how many of its peers are online.
 
@@ -38,7 +39,7 @@ Below each diagram: the round-trip time to the relay and how many of its peers a
 
 ### Showing IP addresses
 
-Add an optional `ips` map to `config.json` to print each peer's address under its dot. It also lets the tab name the host of a relay that is down, by matching the relay URL's IP:
+Add an optional `ips` map to `config.json` to print each peer's address under its name. It also lets the tab name the host of a relay that is down, by matching the relay URL's IP:
 
 ```json
 "ips": {

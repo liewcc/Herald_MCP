@@ -103,6 +103,28 @@ def relay_host(net: dict, probe: dict, ips: dict) -> str | None:
     return next((peer for peer, addr in ips.items() if addr == ip), None)
 
 
+# Network tab palette: (fill, outline, text) per node state
+NODE = {"online": ("#E1F5EE", "#1D9E75", "#085041"),
+        "offline": ("#F1EFE8", "#B4B2A9", "#5F5E5A"),
+        "unknown": ("#FFFFFF", "#B4B2A9", "#5F5E5A")}
+INK, MUTED, RELAY, DOWN = "#222222", "#888780", "#185FA5", "#A32D2D"
+
+
+def split_members(net: dict, host_pc: str | None) -> tuple:
+    """(center, around): the relay host sits in the middle and is not drawn again in the ring."""
+    members = [net["name"]] + [p for p in net.get("peers", []) if p != net["name"]]
+    if not host_pc:
+        return None, members
+    return host_pc, [p for p in members if p != host_pc]
+
+
+def round_rect(c, x0, y0, x1, y1, r, **kw):
+    """Rounded rectangle on a tk Canvas (smoothed polygon; tk has no native one)."""
+    pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
+           x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+    return c.create_polygon(pts, smooth=True, **kw)
+
+
 def node_state(peer: str, probe: dict) -> str:
     """online / offline from the relay's subscriber list; unknown when the relay can't tell us."""
     if probe["online"] is None:
@@ -204,11 +226,17 @@ class HeraldWindow:
         self.msg_queue = msg_queue
         self.project_dir = str(Path(__file__).parent)
 
+        # Own taskbar identity: without it Windows groups the window under pythonw.exe and shows Python's icon.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Herald.Tray")
+        except (AttributeError, OSError):
+            pass
         self.root = tk.Tk()
         self.root.title(f"Herald — {self.peer_name}")
         _ico = Path(__file__).parent / "img" / "logo.ico"
         if _ico.exists():
-            self.root.iconbitmap(str(_ico))
+            self.root.iconbitmap(default=str(_ico))   # default= also covers the taskbar's large icon
         self.root.geometry("720x520")
         self.root.minsize(600, 400)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
@@ -486,57 +514,65 @@ class HeraldWindow:
         if not self._net_probes or w < 50:
             return
         col = w / len(self._net_probes)
-        ring = max(40, min(col * 0.32, (h - 160) / 2))   # leaves room for labels + status line
+        # an oval ring: wider than tall, so side nodes clear the relay ring around the center
+        rx, ry = max(100, min(col * 0.38, 220)), max(60, (h - 170) / 2)
         ips = self.cfg.get("ips", {})
-        green, grey, red, blue, text = "#22aa44", "#a0a0a0", "#cc3333", "#2a6fdb", "#333333"
 
         for i, (net, probe) in enumerate(self._net_probes):
-            cx, cy = col * i + col / 2, 64 + ring
-            host = net["server_url"].split("//")[-1]
-            c.create_text(cx, 18, text=host, fill=text, font=("Segoe UI", 10, "bold"))
-            members = [net["name"]] + [p for p in net.get("peers", []) if p != net["name"]]
-
-            for j, peer in enumerate(members):
-                a = 2 * math.pi * j / len(members) - math.pi / 2
-                x, y = cx + ring * math.cos(a), cy + ring * math.sin(a)
-                state = node_state(peer, probe)
-                c.create_line(cx, cy, x, y, fill=green if state == "online" else grey,
-                              dash=() if state == "online" else (3, 3), width=2)
-                tag = f"peer-{i}-{j}"
-                c.create_oval(x - 14, y - 14, x + 14, y + 14, tags=tag,
-                              fill={"online": green, "offline": grey}.get(state, "#ffffff"),
-                              outline="#222222" if peer == net["name"] else grey,
-                              width=3 if peer == net["name"] else 1)
-                if state == "unknown":
-                    c.create_text(x, y, text="?", fill=grey, font=("Segoe UI", 10, "bold"), tags=tag)
-                label = peer + (" (this PC)" if peer == net["name"] else "")
-                c.create_text(x, y + 25, text=label, fill=text, font=("Segoe UI", 9), tags=tag)
-                if ips.get(peer):
-                    c.create_text(x, y + 39, text=ips[peer], fill=grey, font=("Consolas", 8), tags=tag)
-                if peer != net["name"]:
-                    c.tag_bind(tag, "<Button-1>", lambda e, p=peer: self._open_in_tasks(p))
-                    c.tag_bind(tag, "<Enter>", lambda e: c.config(cursor="hand2"))
-                    c.tag_bind(tag, "<Leave>", lambda e: c.config(cursor=""))
-
-            # relay box goes on top of the spokes
-            # the relay is a program on one of the peers, not a separate box: name its host
-            colr = blue if probe["up"] else red
+            cx, cy = col * i + col / 2, 70 + ry
+            c.create_text(cx, 18, text=net["server_url"].split("//")[-1], fill=INK, font=("Segoe UI", 10, "bold"))
             host_pc = relay_host(net, probe, ips)
-            c.create_rectangle(cx - 52, cy - 18, cx + 52, cy + 18, fill="#f2f6fc", outline=colr,
-                               width=2, dash=() if probe["up"] else (4, 3))
-            c.create_text(cx, cy - (6 if host_pc else 0), text="relay", fill=colr, font=("Segoe UI", 9, "bold"))
-            if host_pc:
-                c.create_text(cx, cy + 8, text=f"runs on {host_pc}", fill=colr, font=("Segoe UI", 8))
+            center, around = split_members(net, host_pc)
+            relay_col = RELAY if probe["up"] else DOWN
+
+            for j, peer in enumerate(around):
+                a = 2 * math.pi * j / len(around) - math.pi / 2
+                x, y = cx + rx * math.cos(a), cy + ry * math.sin(a)
+                online = node_state(peer, probe) == "online"
+                c.create_line(cx, cy, x, y, fill=NODE["online"][1] if online else NODE["offline"][1],
+                              dash=() if online else (4, 4), width=2 if online else 1.5)
+            for j, peer in enumerate(around):
+                a = 2 * math.pi * j / len(around) - math.pi / 2
+                self._draw_node(c, cx + rx * math.cos(a), cy + ry * math.sin(a), peer, net, probe,
+                                ips.get(peer, ""), f"peer-{i}-{j}")
+
+            if center:
+                # the relay is a program on this PC, so the PC itself sits in the middle, ringed by the relay
+                c.create_oval(cx - 66, cy - 46, cx + 66, cy + 46, outline=relay_col, width=1.5, dash=(3, 3))
+                self._draw_node(c, cx, cy, center, net, probe, "relay host", f"host-{i}", big=True)
+            else:   # host unknown: say only that a relay is there
+                c.create_rectangle(cx - 40, cy - 16, cx + 40, cy + 16, fill="#ffffff", outline=relay_col,
+                                   width=2, dash=() if probe["up"] else (4, 3))
+                c.create_text(cx, cy, text="relay", fill=relay_col, font=("Segoe UI", 9, "bold"))
+
+            everyone = ([center] if center else []) + around
             if not probe["up"]:
                 status = "relay unreachable"
             elif probe["online"] is None:
                 status = f"{probe['ms']} ms · old relay, no peer list"
             else:
-                status = f"{probe['ms']} ms · {sum(p in probe['online'] for p in members)}/{len(members)} online"
-            c.create_text(cx, h - 34, text=status, fill=colr, font=("Segoe UI", 9))
+                status = f"{probe['ms']} ms · {sum(p in probe['online'] for p in everyone)}/{len(everyone)} online"
+            c.create_text(cx, h - 34, text=status, fill=relay_col, font=("Segoe UI", 9))
 
-        c.create_text(w / 2, h - 12, fill=grey, font=("Segoe UI", 8),
-                      text="●green online   ●grey offline   ○? unknown   dark ring = this PC")
+        c.create_text(w / 2, h - 12, fill=MUTED, font=("Segoe UI", 8),
+                      text="green online    grey offline    ? unknown    dark outline = this PC    dashed ring = relay")
+
+    def _draw_node(self, c, x, y, peer, net, probe, sub, tag, big=False):
+        state = node_state(peer, probe)
+        fill, edge, ink = NODE[state]
+        me = peer == net["name"]
+        hw, hh = (52, 26) if big else (46, 22)
+        round_rect(c, x - hw, y - hh, x + hw, y + hh, 9, tags=tag, fill=fill,
+                   outline=INK if me else edge, width=2.5 if me else 1, dash=(4, 3) if state == "unknown" else ())
+        name = peer + (" ?" if state == "unknown" else "")
+        sub = "this PC" if me and not big else (f"{sub} · this PC" if me else sub)
+        c.create_text(x, y - (7 if sub else 0), text=name, fill=ink, font=("Segoe UI", 10, "bold"), tags=tag)
+        if sub:
+            c.create_text(x, y + 9, text=sub, fill=ink, font=("Segoe UI", 8), tags=tag)
+        if not me:
+            c.tag_bind(tag, "<Button-1>", lambda e, p=peer: self._open_in_tasks(p))
+            c.tag_bind(tag, "<Enter>", lambda e: c.config(cursor="hand2"))
+            c.tag_bind(tag, "<Leave>", lambda e: c.config(cursor=""))
 
     def _open_in_tasks(self, peer: str):
         self._tasks_peer.set(peer)
