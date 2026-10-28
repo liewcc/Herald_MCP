@@ -136,7 +136,9 @@ def split_members(net: dict, host_pc: str | None) -> tuple:
 
 def round_rect(c, x0, y0, x1, y1, r, **kw):
     """Rounded rectangle on a tk Canvas (smoothed polygon; tk has no native one)."""
-    pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
+    # whole pixels: tk does not antialias, and a fractional spline wobbles along its straight edges
+    x0, y0, x1, y1 = round(x0), round(y0), round(x1), round(y1)
+    pts =[x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
            x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
     return c.create_polygon(pts, smooth=True, **kw)
 
@@ -578,16 +580,16 @@ class HeraldWindow:
             else:
                 up = sum(node_state(p, probe, net["name"], self._me_up) == "online" for p in everyone)
                 status = f"{probe['ms']} ms · {up}/{len(everyone)} online"
-            c.create_text(cx, h - 34, text=status, fill=relay_col, font=("Segoe UI", 9))
+            c.create_text(cx, h - 16, text=status, fill=relay_col, font=("Segoe UI", 9))
 
-        c.create_text(w / 2, h - 12, fill=MUTED, font=("Segoe UI", 8),
-                      text="green online    grey offline    ? unknown    blue band = relay (red = unreachable)")
 
     def _draw_node(self, c, x, y, peer, net, probe, sub, tag, band=None):
         state = node_state(peer, probe, net["name"], self._me_up)
         fill, edge, ink = NODE[state]
         me = peer == net["name"]
+        x, y = round(x), round(y)   # see round_rect
         hw, hh = (58, 33) if band else (46, 22)
+        c.create_text(x - hw + 2, y + hh + 2, text=state, anchor="nw", fill=MUTED, font=("Segoe UI", 8))
         round_rect(c, x - hw, y - hh, x + hw, y + hh, 9, tags=tag, fill=fill,
                    outline=edge, dash=(4, 3) if state == "unknown" else ())
         if band:
@@ -597,7 +599,7 @@ class HeraldWindow:
                              + [x0, y0 + r, x0, y0], smooth=True, fill=band[1], outline="", tags=tag)
             c.create_text(x, y0 + 9, text=band[0], fill="#ffffff", font=("Segoe UI", 8), tags=tag)
             y += 9   # name and sub sit below the band
-        name = peer + (" · this PC" if me else "") + (" ?" if state == "unknown" else "")
+        name = peer + (" · this PC" if me else "")
         c.create_text(x, y - (7 if sub else 0), text=name, fill=ink, font=("Segoe UI", 10, "bold"), tags=tag)
         if sub:
             c.create_text(x, y + 9, text=sub, fill=ink, font=("Segoe UI", 8), tags=tag)

@@ -22,9 +22,9 @@ Each relay in `config.json` (the top level plus every entry under `networks`) ge
 
 | Mark | Meaning |
 |------|---------|
-| Green box, solid line | Online: the PC's tray holds a live connection to this relay |
-| Grey box, dashed line | Offline: no tray connected from that PC |
-| White dashed box, name with `?` | Unknown: the relay is unreachable, or runs an older `server.py` that does not report who is online |
+| `online` under a green box, solid line | The PC's tray holds a live connection to this relay |
+| `offline` under a grey box, dashed line | No tray connected from that PC |
+| `unknown` under a white dashed box | The relay is unreachable, or runs an older `server.py` that does not report who is online |
 | `· this PC` after the name | This PC: online whenever any relay answers |
 | Blue band, `relay · N ms` | The relay is up, running on that PC |
 | Red band, `relay unreachable` | The relay cannot be reached; every line to it is grey |
