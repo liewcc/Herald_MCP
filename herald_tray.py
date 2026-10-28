@@ -9,6 +9,7 @@ Tabs:
   Messages    — incoming message/deposit log (SSE events)
   Comm Log    — full two-way log from herald_comm.log (exec_shell + ask_peer)
   Remote Tasks — fire exec_shell to a peer and see their running processes
+  Network     — star diagram per relay: which peers' trays are connected right now
 
 Auto Reply: when enabled, invokes claude.exe once per incoming message (event-driven,
             NOT a timer — zero token cost while idle).
@@ -17,6 +18,7 @@ Auto-start: python herald_tray.py --install
 """
 import base64
 import json
+import math
 import os
 import queue
 import shutil
@@ -64,6 +66,38 @@ def _auth() -> dict:
 
 def save_config(cfg: dict) -> None:
     CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def networks(cfg: dict) -> list:
+    """Every relay in config: top level is the default network, "networks" adds more (same merge as mcp_server)."""
+    return [cfg] + [{**cfg, **net} for net in cfg.get("networks", {}).values()]
+
+
+def net_for(cfg: dict, peer: str) -> dict:
+    """The network config (relay + token) that lists this peer; unknown peers fall back to the default."""
+    for net in cfg.get("networks", {}).values():
+        if peer in net.get("peers", []):
+            return {**cfg, **net}
+    return cfg
+
+
+def probe_relay(net: dict) -> dict:
+    """GET /health on one relay. online is None when the relay is down or predates the online list."""
+    t0 = time.monotonic()
+    try:
+        r = httpx.get(net["server_url"].rstrip("/") + "/health", timeout=3.0,
+                      headers={"X-Herald-Token": net.get("token", "")})
+        r.raise_for_status()
+        return {"up": True, "ms": int((time.monotonic() - t0) * 1000), "online": r.json().get("online")}
+    except Exception:
+        return {"up": False, "ms": None, "online": None}
+
+
+def node_state(peer: str, probe: dict) -> str:
+    """online / offline from the relay's subscriber list; unknown when the relay can't tell us."""
+    if probe["online"] is None:
+        return "unknown"
+    return "online" if peer in probe["online"] else "offline"
 
 
 # ── Tray icon image ───────────────────────────────────────────────────────────
@@ -205,6 +239,7 @@ class HeraldWindow:
         self._build_messages_tab()
         self._build_commlog_tab()
         self._build_tasks_tab()
+        self._build_network_tab()
 
         ttk.Separator(self.root, orient="horizontal").pack(fill="x")
 
@@ -314,12 +349,13 @@ class HeraldWindow:
     def _build_tasks_tab(self):
         frame = tk.Frame(self.nb)
         self.nb.add(frame, text="  Remote Tasks  ")
+        self._tasks_frame = frame
 
         toolbar = tk.Frame(frame, padx=8, pady=6)
         toolbar.pack(fill="x")
 
         tk.Label(toolbar, text="Peer:", font=("Segoe UI", 9)).pack(side="left")
-        peers = self.cfg.get("peers", ["April"])
+        peers = [p for n in networks(self.cfg) for p in n.get("peers", [])] or ["April"]
         self._tasks_peer = tk.StringVar(value=peers[0] if peers else "")
         peer_cb = ttk.Combobox(toolbar, textvariable=self._tasks_peer,
                                 values=peers, width=12, font=("Segoe UI", 9))
@@ -369,7 +405,8 @@ class HeraldWindow:
     def _do_refresh_tasks(self, peer: str, cmd: str) -> None:
         try:
             cfg   = load_config()
-            relay = cfg.get("server_url", f"http://localhost:{cfg.get('port', 7700)}")
+            net   = net_for(cfg, peer)
+            relay = net.get("server_url", f"http://localhost:{cfg.get('port', 7700)}")
             payload = {
                 "message_id": str(uuid.uuid4()),
                 "from_peer":  cfg.get("name", "unknown"),
@@ -377,7 +414,7 @@ class HeraldWindow:
                 "message":    json.dumps({"type": "shell", "cmd": cmd}),
                 "attachments": [],
             }
-            with httpx.Client(timeout=20.0, headers=_auth()) as client:
+            with httpx.Client(timeout=20.0, headers={"X-Herald-Token": net.get("token", "")}) as client:
                 r = client.post(f"{relay.rstrip('/')}/ask", json=payload)
                 data   = r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
                 answer = data.get("answer", str(data))
@@ -389,6 +426,107 @@ class HeraldWindow:
         except Exception as e:
             text = f"Error: {e}"
         self.msg_queue.put({"type": "tasks_result", "text": text})
+
+    # ── Tab 4: Network ────────────────────────────────────────────────────────
+
+    def _build_network_tab(self):
+        frame = tk.Frame(self.nb)
+        self.nb.add(frame, text="  Network  ")
+        self._net_frame = frame
+        self._net_probes = []   # [(network cfg, probe_relay result)]
+        self._net_busy = False
+
+        toolbar = tk.Frame(frame, padx=8, pady=6)
+        toolbar.pack(fill="x")
+        tk.Button(toolbar, text="Refresh", font=("Segoe UI", 9), relief="flat", bd=1,
+                  padx=10, command=self._refresh_network).pack(side="left")
+        self._net_status = tk.Label(toolbar, text="", font=("Segoe UI", 8), fg="#888")
+        self._net_status.pack(side="left", padx=(8, 0))
+        tk.Label(toolbar, text="Click a PC to open it in Remote Tasks",
+                 font=("Segoe UI", 8), fg="#888").pack(side="right")
+
+        self.net_canvas = tk.Canvas(frame, bg="#0f0f0f", highlightthickness=0)
+        self.net_canvas.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.net_canvas.bind("<Configure>", lambda e: self._draw_network())
+        self.nb.bind("<<NotebookTabChanged>>",
+                     lambda e: self._refresh_network() if self.nb.select() == str(frame) else None)
+        self.root.after(15000, self._net_tick)
+
+    def _net_tick(self):
+        # ponytail: probes only while the Network tab is on screen, so a tray sitting hidden costs nothing
+        if self.root.state() == "normal" and self.nb.select() == str(self._net_frame):
+            self._refresh_network()
+        self.root.after(15000, self._net_tick)
+
+    def _refresh_network(self):
+        if self._net_busy:
+            return
+        self._net_busy = True
+        self._net_status.config(text="Checking…")
+        threading.Thread(
+            target=lambda: self.msg_queue.put(
+                {"type": "net_result", "nets": [(n, probe_relay(n)) for n in networks(load_config())]}),
+            daemon=True,
+        ).start()
+
+    def _draw_network(self):
+        c = self.net_canvas
+        c.delete("all")
+        w, h = c.winfo_width(), c.winfo_height()
+        if not self._net_probes or w < 50:
+            return
+        col = w / len(self._net_probes)
+        ring = max(40, min(col * 0.32, (h - 160) / 2))   # leaves room for labels + status line
+        ips = self.cfg.get("ips", {})
+        green, grey, red, blue, text = "#22bb44", "#666666", "#cc3333", "#3388ff", "#cccccc"
+
+        for i, (net, probe) in enumerate(self._net_probes):
+            cx, cy = col * i + col / 2, 64 + ring
+            host = net["server_url"].split("//")[-1]
+            c.create_text(cx, 18, text=host, fill=text, font=("Segoe UI", 10, "bold"))
+            members = [net["name"]] + [p for p in net.get("peers", []) if p != net["name"]]
+
+            for j, peer in enumerate(members):
+                a = 2 * math.pi * j / len(members) - math.pi / 2
+                x, y = cx + ring * math.cos(a), cy + ring * math.sin(a)
+                state = node_state(peer, probe)
+                c.create_line(cx, cy, x, y, fill=green if state == "online" else grey,
+                              dash=() if state == "online" else (3, 3), width=2)
+                tag = f"peer-{i}-{j}"
+                c.create_oval(x - 14, y - 14, x + 14, y + 14, tags=tag,
+                              fill={"online": green, "offline": grey}.get(state, "#0f0f0f"),
+                              outline="#ffffff" if peer == net["name"] else grey,
+                              width=3 if peer == net["name"] else 1)
+                if state == "unknown":
+                    c.create_text(x, y, text="?", fill=grey, font=("Segoe UI", 10, "bold"), tags=tag)
+                label = peer + (" (this PC)" if peer == net["name"] else "")
+                c.create_text(x, y + 25, text=label, fill=text, font=("Segoe UI", 9), tags=tag)
+                if ips.get(peer):
+                    c.create_text(x, y + 39, text=ips[peer], fill=grey, font=("Consolas", 8), tags=tag)
+                if peer != net["name"]:
+                    c.tag_bind(tag, "<Button-1>", lambda e, p=peer: self._open_in_tasks(p))
+                    c.tag_bind(tag, "<Enter>", lambda e: c.config(cursor="hand2"))
+                    c.tag_bind(tag, "<Leave>", lambda e: c.config(cursor=""))
+
+            # relay box goes on top of the spokes
+            colr = blue if probe["up"] else red
+            c.create_rectangle(cx - 34, cy - 15, cx + 34, cy + 15, fill="#1a1a1a", outline=colr,
+                               width=2, dash=() if probe["up"] else (4, 3))
+            c.create_text(cx, cy, text="relay", fill=colr, font=("Segoe UI", 9, "bold"))
+            if not probe["up"]:
+                status = "relay unreachable"
+            elif probe["online"] is None:
+                status = f"{probe['ms']} ms · old relay, no peer list"
+            else:
+                status = f"{probe['ms']} ms · {sum(p in probe['online'] for p in members)}/{len(members)} online"
+            c.create_text(cx, h - 34, text=status, fill=colr, font=("Segoe UI", 9))
+
+        c.create_text(w / 2, h - 12, fill=grey, font=("Segoe UI", 8),
+                      text="●green online   ●grey offline   ○? unknown   white ring = this PC")
+
+    def _open_in_tasks(self, peer: str):
+        self._tasks_peer.set(peer)
+        self.nb.select(self._tasks_frame)
 
     # ── Polling ───────────────────────────────────────────────────────────────
 
@@ -406,6 +544,11 @@ class HeraldWindow:
                     self._append_comm_entry(event["entry"])
                 elif etype == "tasks_result":
                     self._update_tasks(event["text"])
+                elif etype == "net_result":
+                    self._net_busy = False
+                    self._net_probes = event["nets"]
+                    self._net_status.config(text=f"Updated {time.strftime('%H:%M:%S')}")
+                    self._draw_network()
         except queue.Empty:
             pass
         self._tail_comm_log()

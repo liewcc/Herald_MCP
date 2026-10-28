@@ -192,7 +192,9 @@ async def subscribe(request: Request, peer: str):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "name": config.get("name", "machine-a"), "version": "1.0"}
+    # online = peers whose tray holds an SSE subscription right now (drives the tray's Network tab)
+    return {"status": "ok", "name": config.get("name", "machine-a"), "version": "1.0",
+            "online": sorted(subscribers)}
 
 @app.get("/pending")
 async def get_pending(peer: str = ""):
