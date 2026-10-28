@@ -95,6 +95,21 @@ def probe_relay(net: dict) -> dict:
         return {"up": False, "ms": None, "online": None, "host": None}
 
 
+_my_ip = None
+
+
+def my_ip() -> str:
+    """This PC's Tailscale IPv4, asked once ("" without Tailscale). Call it off the UI thread."""
+    global _my_ip
+    if _my_ip is None:
+        try:
+            _my_ip = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5,
+                                    creationflags=subprocess.CREATE_NO_WINDOW).stdout.split("\n")[0].strip()
+        except Exception:
+            _my_ip = ""
+    return _my_ip
+
+
 def relay_host(net: dict, probe: dict, ips: dict) -> str | None:
     """Which PC runs this relay: its own /health name, else the peer whose IP matches the relay URL."""
     if probe.get("host"):
@@ -125,8 +140,11 @@ def round_rect(c, x0, y0, x1, y1, r, **kw):
     return c.create_polygon(pts, smooth=True, **kw)
 
 
-def node_state(peer: str, probe: dict) -> str:
-    """online / offline from the relay's subscriber list; unknown when the relay can't tell us."""
+def node_state(peer: str, probe: dict, me: str = "", me_up: bool = False) -> str:
+    """online / offline from the relay's subscriber list; unknown when the relay can't tell us.
+    This PC is online whenever any relay answers: it may only send on a network, never subscribe to it."""
+    if peer == me:
+        return "online" if me_up else "offline"
     if probe["online"] is None:
         return "unknown"
     return "online" if peer in probe["online"] else "offline"
@@ -501,11 +519,10 @@ class HeraldWindow:
             return
         self._net_busy = True
         self._net_status.config(text="Checking…")
-        threading.Thread(
-            target=lambda: self.msg_queue.put(
-                {"type": "net_result", "nets": [(n, probe_relay(n)) for n in networks(load_config())]}),
-            daemon=True,
-        ).start()
+        def probe():
+            my_ip()   # warm the cache here, off the UI thread
+            self.msg_queue.put({"type": "net_result", "nets": [(n, probe_relay(n)) for n in networks(load_config())]})
+        threading.Thread(target=probe, daemon=True).start()
 
     def _draw_network(self):
         c = self.net_canvas
@@ -514,9 +531,11 @@ class HeraldWindow:
         if not self._net_probes or w < 50:
             return
         col = w / len(self._net_probes)
-        # an oval ring: wider than tall, so side nodes clear the relay ring around the center
+        # an oval ring: wider than tall, so side nodes clear the relay host in the center
         rx, ry = max(100, min(col * 0.38, 220)), max(60, (h - 170) / 2)
-        ips = self.cfg.get("ips", {})
+        # my_ip() is already cached: the probe thread asked it before any result could reach here
+        ips = {**self.cfg.get("ips", {}), self.cfg.get("name", ""): my_ip()}
+        self._me_up = any(p["up"] for _, p in self._net_probes)
 
         for i, (net, probe) in enumerate(self._net_probes):
             cx, cy = col * i + col / 2, 70 + ry
@@ -528,7 +547,8 @@ class HeraldWindow:
             for j, peer in enumerate(around):
                 a = 2 * math.pi * j / len(around) - math.pi / 2
                 x, y = cx + rx * math.cos(a), cy + ry * math.sin(a)
-                online = node_state(peer, probe) == "online"
+                # a dead relay carries nothing, so every link to it is grey even when the PC itself is up
+                online = probe["up"] and node_state(peer, probe, net["name"], self._me_up) == "online"
                 c.create_line(cx, cy, x, y, fill=NODE["online"][1] if online else NODE["offline"][1],
                               dash=() if online else (4, 4), width=2 if online else 1.5)
             for j, peer in enumerate(around):
@@ -537,9 +557,10 @@ class HeraldWindow:
                                 ips.get(peer, ""), f"peer-{i}-{j}")
 
             if center:
-                # the relay is a program on this PC, so the PC itself sits in the middle, ringed by the relay
-                c.create_oval(cx - 66, cy - 46, cx + 66, cy + 46, outline=relay_col, width=1.5, dash=(3, 3))
-                self._draw_node(c, cx, cy, center, net, probe, "relay host", f"host-{i}", big=True)
+                # the relay is a program on this PC: the PC sits in the middle, the relay is a band on its card
+                band = f"relay · {probe['ms']} ms" if probe["up"] else "relay unreachable"
+                self._draw_node(c, cx, cy, center, net, probe, ips.get(center, ""), f"host-{i}",
+                                band=(band, relay_col))
             else:   # host unknown: say only that a relay is there
                 c.create_rectangle(cx - 40, cy - 16, cx + 40, cy + 16, fill="#ffffff", outline=relay_col,
                                    width=2, dash=() if probe["up"] else (4, 3))
@@ -551,21 +572,28 @@ class HeraldWindow:
             elif probe["online"] is None:
                 status = f"{probe['ms']} ms · old relay, no peer list"
             else:
-                status = f"{probe['ms']} ms · {sum(p in probe['online'] for p in everyone)}/{len(everyone)} online"
+                up = sum(node_state(p, probe, net["name"], self._me_up) == "online" for p in everyone)
+                status = f"{probe['ms']} ms · {up}/{len(everyone)} online"
             c.create_text(cx, h - 34, text=status, fill=relay_col, font=("Segoe UI", 9))
 
         c.create_text(w / 2, h - 12, fill=MUTED, font=("Segoe UI", 8),
-                      text="green online    grey offline    ? unknown    dark outline = this PC    dashed ring = relay")
+                      text="green online    grey offline    ? unknown    blue band = relay (red = unreachable)")
 
-    def _draw_node(self, c, x, y, peer, net, probe, sub, tag, big=False):
-        state = node_state(peer, probe)
+    def _draw_node(self, c, x, y, peer, net, probe, sub, tag, band=None):
+        state = node_state(peer, probe, net["name"], self._me_up)
         fill, edge, ink = NODE[state]
         me = peer == net["name"]
-        hw, hh = (52, 26) if big else (46, 22)
+        hw, hh = (58, 33) if band else (46, 22)
         round_rect(c, x - hw, y - hh, x + hw, y + hh, 9, tags=tag, fill=fill,
-                   outline=INK if me else edge, width=2.5 if me else 1, dash=(4, 3) if state == "unknown" else ())
-        name = peer + (" ?" if state == "unknown" else "")
-        sub = "this PC" if me and not big else (f"{sub} · this PC" if me else sub)
+                   outline=edge, dash=(4, 3) if state == "unknown" else ())
+        if band:
+            # rounded top, square bottom: tk's smooth polygon keeps a corner sharp where a point is tripled
+            x0, y0, x1, yb, r = x - hw, y - hh, x + hw, y - hh + 18, 9
+            c.create_polygon([x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r] + [x1, yb] * 3 + [x0, yb] * 3
+                             + [x0, y0 + r, x0, y0], smooth=True, fill=band[1], outline="", tags=tag)
+            c.create_text(x, y0 + 9, text=band[0], fill="#ffffff", font=("Segoe UI", 8), tags=tag)
+            y += 9   # name and sub sit below the band
+        name = peer + (" · this PC" if me else "") + (" ?" if state == "unknown" else "")
         c.create_text(x, y - (7 if sub else 0), text=name, fill=ink, font=("Segoe UI", 10, "bold"), tags=tag)
         if sub:
             c.create_text(x, y + 9, text=sub, fill=ink, font=("Segoe UI", 8), tags=tag)
