@@ -18,16 +18,16 @@
 
 ![Network tab](img/network-tab.png)
 
-Each relay in `config.json` (the top level plus every entry under `networks`) gets its own diagram. The relay is a program running on one of the PCs, so that PC sits in the middle, labelled **relay host** and circled by a dashed ring; the network's other PCs are placed around it. The host appears only once.
+Each relay in `config.json` (the top level plus every entry under `networks`) gets its own diagram. The relay is a program running on one of the PCs, so that PC sits in the middle with a coloured **relay band** across the top of its card; the network's other PCs are placed around it. The host appears only once.
 
 | Mark | Meaning |
 |------|---------|
 | Green box, solid line | Online: the PC's tray holds a live connection to this relay |
 | Grey box, dashed line | Offline: no tray connected from that PC |
 | White dashed box, name with `?` | Unknown: the relay is unreachable, or runs an older `server.py` that does not report who is online |
-| Dark outline | This PC |
-| Blue dashed ring | The relay is up, running on the PC inside the ring |
-| Red dashed ring | The relay cannot be reached |
+| `· this PC` after the name | This PC: online whenever any relay answers |
+| Blue band, `relay · N ms` | The relay is up, running on that PC |
+| Red band, `relay unreachable` | The relay cannot be reached; every line to it is grey |
 | Plain "relay" box in the middle | The relay's host PC could not be identified (see [Showing IP addresses](#showing-ip-addresses)) |
 
 Below each diagram: the round-trip time to the relay and how many of its peers are online.
@@ -35,11 +35,11 @@ Below each diagram: the round-trip time to the relay and how many of its peers a
 - **Click a PC** to jump to Remote Tasks with that peer selected.
 - The tab refreshes when you open it, then every 15 seconds while it stays open. Nothing is polled while the window is hidden.
 - Peers come from each network's `peers` list in `config.json`. A PC that is connected but missing from that list will not be drawn.
-- This PC's tray subscribes only to the **top-level** relay, so it shows as offline in every other network. That is accurate: peers there cannot send commands to it.
+- This PC's tray subscribes only to the **top-level** relay: peers in other networks cannot send commands to it, but it can still send to them. The diagram therefore shows it online in every network whose relay answers. The **Connected / Disconnected** light in the title bar is the top-level subscription alone.
 
 ### Showing IP addresses
 
-Add an optional `ips` map to `config.json` to print each peer's address under its name. It also lets the tab name the host of a relay that is down, by matching the relay URL's IP:
+Add an optional `ips` map to `config.json` to print each peer's address under its name (this PC's own address comes from `tailscale ip -4`). It also lets the tab name the host of a relay that is down, by matching the relay URL's IP:
 
 ```json
 "ips": {
