@@ -235,7 +235,7 @@ Decide these **before** you start, so `config.json` is right the first time:
    and explains what to fix if the check fails. A new relay prints the URL and token the other PCs need.
 4. Restart **Claude Code** or **Antigravity** on PCs that control others.
 
-To change settings later, rerun `python setup_wizard.py` instead of editing `config.json`.
+To change settings later, rerun `python setup_wizard.py` instead of editing `config.json` (it keeps settings it does not ask about, such as `auto_reply`).
 AI installers: see the "AI installers" section in [CLAUDE.md](CLAUDE.md) for the non-interactive flags.
 
 ---
@@ -285,7 +285,7 @@ Herald operates under a shared-secret trust model. It implements the following s
 | `server.py` | Cloud server (central hub) |
 | `mcp_server.py` | Local MCP server (started automatically by your AI host) |
 | `herald_tray.py` | Windows system tray daemon with UI and Auto Reply |
-| `setup.bat` | Installer: Python, dependencies, then the setup wizard |
+| `setup.bat` | Installer: git, Python, Tailscale (if missing), dependencies, then the setup wizard; `--prereqs` for the first part only |
 | `setup_wizard.py` | Asks role/network/token first, verifies the relay, writes `config.json`, sets up autostart |
 | `server_deploy.ps1` | Deploy Herald to a new cloud server |
 | `config.example.json` | Configuration template |

@@ -12,18 +12,11 @@ The script will:
 
 ## 2. Configure Your Machine
 
-1. Copy `config.example.json` → rename to `config.json`.
-2. Edit `config.json`:
-   ```json
-   {
-     "name": "machine-a",
-     "server_url": "http://YOUR_SERVER_IP:7700",
-     "peers": ["machine-b"]
-   }
-   ```
-   - `"name"`: your own computer's name
-   - `"peers"`: list of other machines you want to communicate with (each PC picks its name in the setup wizard; default is its lower-case hostname)
-3. Run `setup.bat`.
+1. Run `setup.bat` and choose **join**.
+2. Enter the server address (`http://YOUR_SERVER_IP:7700`) and the token `server_deploy.ps1` printed
+   (also in `C:\Herald_MCP\config.json` on the server). The wizard checks both before writing `config.json`.
+3. Give this PC a name, and list the peers you want to talk to (each PC picks its own name in the wizard;
+   default is its lower-case hostname).
 4. Restart **Claude Code** or **Antigravity**.
 
 ## 3. Invite Others

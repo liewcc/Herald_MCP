@@ -1,5 +1,30 @@
 # Herald MCP — Handoff Notes
 
+## 2026-10-28 — Setup wizard: still to verify on a blank PC
+
+The setup.bat / setup_wizard.py rework passed its self-test, the setup.bat lint, test_security.py,
+test_networks.py, two full isolated setup.bat runs (fake winget/tailscale/claude) and a live join
+against abby's relay. These parts were **never run for real** — test them on a completely blank
+Windows PC (or Windows Sandbox):
+
+- [ ] Real winget installs of git, Python 3.12 (user scope) and Tailscale, and the PATH refresh
+      that lets the same window find them afterwards.
+- [ ] The Tailscale UAC admin prompt appears and the step waits for it.
+- [ ] `tailscale up` opens the browser login, and setup continues after sign-in.
+- [ ] `--prereqs` mode run by an AI installer ends with `[OK] Prerequisites ready.` (exit 0).
+- [ ] Real `claude mcp remove/add -s user herald` (only the arguments were checked, with a fake claude).
+- [ ] Antigravity registration on a PC that really has Antigravity installed.
+- [ ] Tray UI: clicking **Start on Login** writes/removes the autostart entry, and starting a second
+      tray shows the "Herald is already running" box.
+- [ ] Desktop shortcut on a OneDrive-redirected Desktop.
+- [ ] Non-English Windows and other Python versions (only tested on cc: English Windows, Python 3.12/3.14).
+- [ ] Reboot: herald_autostart.vbs brings up the relay (python.exe, hidden console) and one tray.
+
+Also pending: April, abby, leno and dv still run the old code. Pull master on each and restart the
+tray before relying on the single-instance mutex.
+
+---
+
 ## Session 2026-06-28 — Shell Allowlist, Tray UI, Token-Burn Fix, ask_peer
 
 ### What was done

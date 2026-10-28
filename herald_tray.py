@@ -35,10 +35,6 @@ from PIL import Image, ImageDraw
 
 CONFIG_PATH    = Path(__file__).parent / "config.json"
 COMM_LOG       = Path(__file__).parent / "herald_comm.log"
-STARTUP_LNK    = (
-    Path(os.environ["APPDATA"])
-    / "Microsoft/Windows/Start Menu/Programs/Startup/herald_tray.lnk"
-)
 
 REPLY_PROMPT = (
     "Use herald MCP tools. Call get_pending to retrieve incoming messages. "
@@ -83,26 +79,23 @@ def make_icon_image() -> Image.Image:
     return img
 
 
-# ── Startup shortcut ──────────────────────────────────────────────────────────
+# ── Startup entry ─────────────────────────────────────────────────────────────
+# Same entries setup_wizard writes, so the "Start on Login" checkbox shows and changes the real state.
 
 def is_startup_enabled() -> bool:
-    return STARTUP_LNK.exists()
+    import setup_wizard
+    return any((setup_wizard.STARTUP / n).exists() for n in ("herald_autostart.vbs", "herald_tray.lnk"))
 
 
-def install_startup() -> None:
-    import win32com.client
-    pythonw = Path(sys.executable).parent / "pythonw.exe"
-    script = Path(__file__).resolve()
-    wsh = win32com.client.Dispatch("WScript.Shell")
-    lnk = wsh.CreateShortcut(str(STARTUP_LNK))
-    lnk.TargetPath = str(pythonw)
-    lnk.Arguments = f'"{script}"'
-    lnk.WorkingDirectory = str(script.parent)
-    lnk.Save()
+def install_startup() -> Path:
+    import setup_wizard
+    # A relay PC must start server.py at logon too, not just the tray.
+    return setup_wizard.install_autostart("relay" if load_config().get("host") else "join")
 
 
 def uninstall_startup() -> None:
-    STARTUP_LNK.unlink(missing_ok=True)
+    import setup_wizard
+    setup_wizard.remove_autostart()
 
 
 # ── Claude auto-reply ─────────────────────────────────────────────────────────
@@ -877,13 +870,27 @@ def sse_thread(cfg: dict, msg_queue: queue.Queue, running: threading.Event,
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def already_running(name: str) -> bool:
+    """One tray per peer: a second subscriber makes the relay's work queue drop exec_shell commands."""
+    import ctypes
+    global _instance_mutex  # held until the process exits
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateMutexW.restype = ctypes.c_void_p
+    _instance_mutex = k32.CreateMutexW(None, False, f"Local\\HeraldTray-{name}")
+    return ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
+
+
 def main() -> None:
     if "--install" in sys.argv:
-        install_startup()
-        print(f"Shortcut created: {STARTUP_LNK}")
+        print(f"Startup entry created: {install_startup()}")
         return
 
     cfg = load_config()
+    if already_running(cfg["name"]):
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            None, "Herald is already running - use its icon in the system tray.", "Herald", 0x40)
+        return
     project_dir = str(Path(__file__).parent)
 
     msg_queue: queue.Queue = queue.Queue()

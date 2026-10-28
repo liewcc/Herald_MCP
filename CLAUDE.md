@@ -5,8 +5,9 @@ Agents communicate via a central relay server using MCP tools.
 
 ## Setup
 
-Humans: run `setup.bat` (installs git, Python and Tailscale if missing, pip deps, Tailscale login, then the wizard). Never hand-edit
-`config.json` after the fact — rerun `python setup_wizard.py` instead.
+Humans: run `setup.bat` (installs git, Python and Tailscale if missing, pip deps, Tailscale login, then the wizard).
+To change what the wizard asks (role, name, relay URL, token, peers), rerun `python setup_wizard.py` rather than
+editing `config.json`; other keys (`auto_reply`, `watch`, `notify`, ...) may be edited by hand — a rerun keeps them.
 
 ### AI installers — follow these steps in order
 
@@ -112,7 +113,8 @@ What it does: for `join` it checks the relay's `/health` with the token **before
 relay/tray already running from this checkout (never `mcp_server.py`), writes the Startup-folder
 `herald_autostart.vbs` (relay via `python.exe` with a hidden console — never `pythonw`, uvicorn dies
 without a console; tray via `pythonw`), removes stale `herald_tray.lnk` / `run_shell_agent.vbs`
-entries that would start a duplicate tray, and starts Herald.
+entries that would start a duplicate tray (with `--no-autostart` it removes all of them), and starts Herald.
+Settings it does not ask about are carried over from the old `config.json`.
 
 **Step 5 — Check the result.**
 
@@ -131,7 +133,8 @@ that PC's hostname. If it times out intermittently, check for two trays on the p
 and rerun the wizard, which leaves exactly one.
 
 **Step 6 — Controller PCs only:** register `mcp_server.py` with the agent host and restart it —
-Claude Code: `claude mcp add herald -- <python.exe> <repo>\mcp_server.py`; Claude Desktop: add it
+Claude Code: `claude mcp add -s user herald -- <python.exe> <repo>\mcp_server.py` (`-s user`, or it
+only works inside the Herald folder); Claude Desktop: add it
 under `mcpServers` in `claude_desktop_config.json`. Use the **full path** of the python.exe that
 has Herald's dependencies (`python -c "import sys; print(sys.executable)"`), not a bare `python` —
 a PC can have several installs. (A full interactive `setup.bat` run offers Claude Code and
@@ -140,13 +143,15 @@ Antigravity and does this for you.)
 `windows-mcp` (remote desktop control for `ask_peer`, as on April) is optional and must live in
 its **own** environment (e.g. a separate venv): it pulls `mcp` 2.x, and `mcp_server.py` needs `mcp<2`.
 
-**Changing settings later:** rerun the wizard with new flags — never hand-edit `config.json`.
-A relay rerun keeps its token, so connected peers stay connected.
+**Changing settings later:** rerun the wizard with new flags for role, name, URL, token or peers —
+don't hand-edit those. A rerun keeps every other key (`auto_reply`, `watch`, `notify`, `networks`), and a
+relay rerun keeps its token, so connected peers stay connected.
 
 Rules learned the hard way:
 - `schtasks /Create` needs admin on many PCs — that is why autostart uses the Startup folder.
-- One tray per peer: two subscribers make the relay's work queue drop `exec_shell` commands.
-  Don't also tick the tray UI's **Start on Login** (it adds `herald_tray.lnk` beside the VBS).
+- One tray per peer: two subscribers make the relay's work queue drop `exec_shell` commands. The
+  tray now refuses to start a second instance for the same peer name ("Herald is already running"),
+  so a duplicate from the desktop shortcut or the tray UI's **Start on Login** can no longer slip in.
 - Write files with Python (`python -c` / the wizard), not PowerShell here-strings: a pasted
   `'@ | Set-Content ...` line ends up inside the JSON.
 - When a human pastes your commands: one command per block, and tell them not to copy the
