@@ -2,5 +2,12 @@
   "name": "machine-a",
   "server_url": "http://YOUR_SERVER_IP:7700",
   "token": "SAME_SHARED_TOKEN_AS_THE_SERVER",
-  "peers": ["machine-b"]
+  "peers": ["machine-b"],
+  "networks": {
+    "other": {
+      "server_url": "http://OTHER_RELAY_IP:7700",
+      "token": "OTHER_RELAY_TOKEN",
+      "peers": ["machine-c"]
+    }
+  }
 }

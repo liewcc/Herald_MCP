@@ -15,10 +15,26 @@ CONFIG_PATH  = Path(__file__).parent / "config.json"
 COMM_LOG     = Path(__file__).parent / "herald_comm.log"
 
 
-def load_config() -> dict:
+def load_config(peer: str = "") -> dict:
+    """Config for the network `peer` is on.
+
+    Top-level keys are the default network. Each entry in "networks" overrides them
+    (server_url, token, peers, ...) for the peers it lists, so one MCP server can reach
+    several relays that never share a token.
+    """
     if not CONFIG_PATH.exists():
         raise FileNotFoundError("config.json not found")
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    for net in cfg.get("networks", {}).values():
+        if peer in net.get("peers", []):
+            return {**cfg, **net}
+    return cfg
+
+
+def all_configs() -> list:
+    """One config per network, default first — for inbox tools that must check every relay."""
+    cfg = load_config()
+    return [cfg] + [{**cfg, **net} for net in cfg.get("networks", {}).values()]
 
 
 def server_url(config: dict, path: str) -> str:
@@ -51,7 +67,7 @@ async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = N
     if attachments is None:
         attachments = []
     try:
-        config = load_config()
+        config = load_config(peer_name)
     except Exception as e:
         return {"error": str(e)}
 
@@ -90,68 +106,81 @@ async def ask_peer(peer_name: str, message: str, attachments: Optional[list] = N
 
 @mcp.tool()
 async def get_pending() -> list:
-    """Check inbox for incoming questions from remote peers."""
+    """Check inbox for incoming questions from remote peers, on every configured relay."""
     try:
-        config = load_config()
+        configs = all_configs()
     except Exception as e:
         return [{"error": str(e)}]
 
-    name = config.get("name", "")
-    async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
-        try:
-            r = await client.get(server_url(config, "/pending"), params={"peer": name})
-            return r.json() if r.status_code == 200 else [{"error": f"HTTP {r.status_code}"}]
-        except Exception as e:
-            return [{"error": str(e)}]
+    out = []
+    for config in configs:
+        relay = config.get("server_url", "")
+        async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
+            try:
+                r = await client.get(server_url(config, "/pending"), params={"peer": config.get("name", "")})
+                if r.status_code == 200:
+                    out += [{**m, "relay": relay} for m in r.json()]
+                else:
+                    out.append({"error": f"HTTP {r.status_code}", "relay": relay})
+            except Exception as e:
+                out.append({"error": str(e), "relay": relay})
+    return out
 
 
 @mcp.tool()
 async def reply(message_id: str, answer: str, attachments: Optional[list] = None) -> dict:
-    """Send a reply to a pending incoming question."""
+    """Send a reply to a pending incoming question (routed to whichever relay holds it)."""
     if attachments is None:
         attachments = []
     try:
-        config = load_config()
+        configs = all_configs()
     except Exception as e:
         return {"error": str(e)}
 
-    async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
-        try:
-            r = await client.post(server_url(config, f"/reply/{message_id}"),
-                                  json={"answer": answer, "attachments": attachments})
-            return r.json() if r.status_code == 200 else {"error": f"HTTP {r.status_code}"}
-        except Exception as e:
-            return {"error": str(e)}
+    # ponytail: tries each relay until one knows the id (others answer 404); fine for a handful of networks
+    errors = []
+    for config in configs:
+        async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
+            try:
+                r = await client.post(server_url(config, f"/reply/{message_id}"),
+                                      json={"answer": answer, "attachments": attachments})
+                if r.status_code == 200:
+                    return r.json()
+                errors.append(f"{config.get('server_url')}: HTTP {r.status_code}")
+            except Exception as e:
+                errors.append(f"{config.get('server_url')}: {e}")
+    return {"error": "; ".join(errors)}
 
 
 @mcp.tool()
 async def list_peers() -> dict:
-    """Show configured peers and server health."""
+    """Show configured peers and server health, per relay."""
     try:
-        config = load_config()
+        configs = all_configs()
     except Exception as e:
         return {"error": str(e)}
 
-    peers = config.get("peers", [])
-    async with httpx.AsyncClient(timeout=3.0, headers=_auth(config)) as client:
-        try:
-            r = await client.get(server_url(config, "/health"))
-            server_ok = r.status_code == 200
-        except Exception:
-            server_ok = False
-
-    return {
-        "server_url": config.get("server_url", "localhost"),
-        "server_online": server_ok,
-        "peers": peers,
-    }
+    networks = []
+    for config in configs:
+        async with httpx.AsyncClient(timeout=3.0, headers=_auth(config)) as client:
+            try:
+                r = await client.get(server_url(config, "/health"))
+                server_ok = r.status_code == 200
+            except Exception:
+                server_ok = False
+        networks.append({
+            "server_url": config.get("server_url", "localhost"),
+            "server_online": server_ok,
+            "peers": config.get("peers", []),
+        })
+    return {"networks": networks}
 
 
 @mcp.tool()
 async def ping_peer(peer_name: str) -> dict:
-    """Check if the Herald server is reachable (peer_name ignored in hub mode)."""
+    """Check if the relay serving peer_name is reachable (does not prove the peer itself is up)."""
     try:
-        config = load_config()
+        config = load_config(peer_name)
     except Exception as e:
         return {"online": False, "error": str(e)}
 
@@ -175,7 +204,7 @@ async def send_file(peer_name: str, file_path: str, message: str = "") -> dict:
         message: Optional text message to accompany the file.
     """
     try:
-        config = load_config()
+        config = load_config(peer_name)
     except Exception as e:
         return {"error": str(e)}
 
@@ -222,7 +251,7 @@ async def deposit_file(peer_name: str, file_path: str, message: str = "", expire
         expires_minutes: How long the deposit is kept on the server (default 30).
     """
     try:
-        config = load_config()
+        config = load_config(peer_name)
     except Exception as e:
         return {"error": str(e)}
 
@@ -258,21 +287,24 @@ async def get_deposits(save_dir: str = "") -> list:
         save_dir: If provided, save received files to this directory.
     """
     try:
-        config = load_config()
+        configs = all_configs()
     except Exception as e:
         return [{"error": str(e)}]
 
-    name = config.get("name", "")
-    async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
-        try:
-            r = await client.get(server_url(config, "/deposits"), params={"peer": name})
-            if r.status_code != 200:
-                return [{"error": f"HTTP {r.status_code}"}]
-            items = r.json()
-        except Exception as e:
-            return [{"error": str(e)}]
+    items, errors = [], []
+    for config in configs:
+        async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
+            try:
+                r = await client.get(server_url(config, "/deposits"), params={"peer": config.get("name", "")})
+                if r.status_code == 200:
+                    items += r.json()
+                else:
+                    errors.append({"error": f"HTTP {r.status_code}", "relay": config.get("server_url")})
+            except Exception as e:
+                errors.append({"error": str(e), "relay": config.get("server_url")})
 
     if not save_dir or not items:
+        return items + errors
         return items
 
     out_dir = Path(save_dir)
@@ -282,7 +314,7 @@ async def get_deposits(save_dir: str = "") -> list:
         data = base64.b64decode(item.get("data_b64", ""))
         (out_dir / filename).write_bytes(data)
         item["saved_to"] = str(out_dir / filename)
-    return items
+    return items + errors
 
 
 @mcp.tool()
@@ -293,21 +325,7 @@ async def save_attachment(message_id: str, save_dir: str) -> dict:
         message_id: The message ID from get_pending().
         save_dir: Directory path where files will be saved.
     """
-    try:
-        config = load_config()
-    except Exception as e:
-        return {"error": str(e)}
-
-    name = config.get("name", "")
-    async with httpx.AsyncClient(timeout=10.0, headers=_auth(config)) as client:
-        try:
-            r = await client.get(server_url(config, "/pending"), params={"peer": name})
-            if r.status_code != 200:
-                return {"error": f"HTTP {r.status_code}"}
-            messages = r.json()
-        except Exception as e:
-            return {"error": str(e)}
-
+    messages = await get_pending()
     msg = next((m for m in messages if m.get("message_id") == message_id), None)
     if not msg:
         return {"error": f"Message '{message_id}' not found in pending inbox"}
@@ -343,7 +361,7 @@ async def exec_shell(peer_name: str, cmd: str, timeout: int = 60) -> dict:
         timeout: Seconds to wait for the result (default 60).
     """
     try:
-        config = load_config()
+        config = load_config(peer_name)
     except Exception as e:
         return {"error": str(e)}
 
