@@ -35,7 +35,11 @@ Below each diagram: the round-trip time to the relay and how many of its peers a
 - **Click a PC** to jump to Remote Tasks with that peer selected.
 - The tab refreshes when you open it, then every 15 seconds while it stays open. Nothing is polled while the window is hidden.
 - Peers come from each network's `peers` list in `config.json`. A PC that is connected but missing from that list will not be drawn.
-- This PC's tray subscribes only to the **top-level** relay: peers in other networks cannot send commands to it, but it can still send to them. The diagram therefore shows it online in every network whose relay answers. The **Connected / Disconnected** light in the title bar is the top-level subscription alone.
+- This PC's tray subscribes only to the **top-level** relay: peers in other networks cannot send commands to it, but it can still send to them. The diagram therefore shows it online in every network whose relay answers.
+
+### Relay pills in the title bar
+
+One pill per relay, named after the PC it runs on: **green** reachable, **red** not, grey before the first check. The first pill (the top-level relay) follows the tray's own subscription, so green there means other PCs can send commands to this one. Hover a pill for the relay address and round-trip time. Pills refresh every 15 seconds while the window is open.
 
 ### Showing IP addresses
 

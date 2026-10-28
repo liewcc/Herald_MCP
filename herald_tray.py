@@ -122,7 +122,8 @@ def relay_host(net: dict, probe: dict, ips: dict) -> str | None:
 NODE = {"online": ("#E1F5EE", "#1D9E75", "#085041"),
         "offline": ("#F1EFE8", "#B4B2A9", "#5F5E5A"),
         "unknown": ("#FFFFFF", "#B4B2A9", "#5F5E5A")}
-INK, MUTED, RELAY, DOWN = "#222222", "#888780", "#185FA5", "#A32D2D"
+PILL_UP, PILL_DOWN = NODE["online"], ("#FCEBEB", "#A32D2D", "#791F1F")
+INK, MUTED, RELAY, DOWN ="#222222", "#888780", "#185FA5", "#A32D2D"
 
 
 def split_members(net: dict, host_pc: str | None) -> tuple:
@@ -281,10 +282,12 @@ class HeraldWindow:
         self.name_label.pack(side="left", padx=(6, 0))
         self.name_label.bind("<Button-1>", lambda e: self._rename())
 
-        self.status_dot = tk.Label(top, text="●", fg="#aaa", font=("Segoe UI", 14))
-        self.status_dot.pack(side="right")
-        self.status_label = tk.Label(top, text="Connecting…", fg="#888", font=("Segoe UI", 9))
-        self.status_label.pack(side="right", padx=(0, 4))
+        # one pill per relay: green reachable, red not, grey not checked yet
+        self._subscribed = None   # the tray's own link to the top-level relay; None while connecting
+        self.pills = tk.Canvas(top, height=24, width=1, bg=top.cget("bg"), highlightthickness=0)
+        self.pills.pack(side="right")
+        self.pill_tip = tk.Label(top, text="", fg="#888", font=("Segoe UI", 8))
+        self.pill_tip.pack(side="right", padx=(0, 6))
 
         ttk.Separator(self.root, orient="horizontal").pack(fill="x")
 
@@ -507,10 +510,11 @@ class HeraldWindow:
         self.nb.bind("<<NotebookTabChanged>>",
                      lambda e: self._refresh_network() if self.nb.select() == str(frame) else None)
         self.root.after(15000, self._net_tick)
+        self._draw_pills()
 
     def _net_tick(self):
-        # ponytail: probes only while the Network tab is on screen, so a tray sitting hidden costs nothing
-        if self.root.state() == "normal" and self.nb.select() == str(self._net_frame):
+        # ponytail: probes only while the window is on screen (header pills + Network tab), so a hidden tray costs nothing
+        if self.root.state() == "normal":
             self._refresh_network()
         self.root.after(15000, self._net_tick)
 
@@ -627,6 +631,7 @@ class HeraldWindow:
                     self._net_probes = event["nets"]
                     self._net_status.config(text=f"Updated {time.strftime('%H:%M:%S')}")
                     self._draw_network()
+                    self._draw_pills()
         except queue.Empty:
             pass
         self._tail_comm_log()
@@ -800,17 +805,38 @@ class HeraldWindow:
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+        self._refresh_network()
 
     def hide(self):
         self.root.withdraw()
 
     def set_status(self, connected: bool):
-        if connected:
-            self.status_dot.config(fg="#22bb44")
-            self.status_label.config(text="Connected")
-        else:
-            self.status_dot.config(fg="#cc3333")
-            self.status_label.config(text="Disconnected")
+        self._subscribed = connected
+        self._draw_pills()
+
+    def _draw_pills(self):
+        c = self.pills
+        c.delete("all")
+        ips = self.cfg.get("ips", {})
+        probes = self._net_probes or [(n, {"up": None, "ms": None, "host": None}) for n in networks(self.cfg)]
+        x = 2
+        for i, (net, probe) in enumerate(probes):
+            # the top-level pill follows the tray's own subscription: green there means commands can reach this PC
+            up = self._subscribed if i == 0 else probe["up"]
+            fill, edge, ink = (PILL_UP if up else PILL_DOWN) if up is not None else NODE["unknown"]
+            host = net["server_url"].split("//")[-1]
+            label = relay_host(net, probe, ips) or host.split(":")[0]
+            t = c.create_text(x + 22, 12, text=label, anchor="w", fill=ink, font=("Segoe UI", 9, "bold"))
+            x1 = c.bbox(t)[2] + 10
+            pill = round_rect(c, x, 1, x1, 23, 11, fill=fill, outline=edge)
+            dot = c.create_oval(x + 9, 8, x + 17, 16, fill=edge, outline="")
+            c.tag_raise(t)
+            tip = host + (f" · {probe['ms']} ms" if probe.get("ms") else " · unreachable" if up is False else "")
+            for item in (pill, dot, t):
+                c.tag_bind(item, "<Enter>", lambda e, s=tip: self.pill_tip.config(text=s))
+                c.tag_bind(item, "<Leave>", lambda e: self.pill_tip.config(text=""))
+            x = x1 + 6
+        c.config(width=x)
 
     def run(self):
         self.root.mainloop()
