@@ -117,6 +117,19 @@ def tailscale_ip():
         return None
 
 
+def claude_ready():
+    """True when the Claude Code CLI is installed and logged in; Auto Reply runs it for every ask_peer."""
+    exe = shutil.which("claude")
+    if not exe:
+        return False
+    try:
+        out = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, timeout=20,
+                             encoding="utf-8", errors="replace").stdout
+        return bool(json.loads(out).get("loggedIn"))
+    except (OSError, subprocess.SubprocessError, ValueError):  # ValueError: not JSON (old CLI, error text)
+        return False
+
+
 def tailscale_machines():
     """`tailscale status` lines (one per visible machine), so the user can spot the relay PC."""
     exe = shutil.which("tailscale") or r"C:\Program Files\Tailscale\tailscale.exe"
@@ -363,6 +376,9 @@ def run(a):
         print("     Each of those PCs must see this PC over Tailscale:")
         print(SHARE_HELP)
         print("     If they still cannot connect, allow inbound TCP 7700 in Windows Firewall on this PC.")
+    if cfg.get("auto_reply") and not claude_ready():
+        print("\nWARNING: Auto Reply is on, but the Claude Code CLI is not installed or not logged in, so ask_peer to\n"
+              "         this PC gets no answer. Install it (winget install Anthropic.ClaudeCode), then run: claude auth login")
     print("\n[OK] Herald started. Done.")
 
 

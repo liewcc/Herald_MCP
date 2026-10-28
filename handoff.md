@@ -13,6 +13,10 @@ Windows PC (or Windows Sandbox):
 - [ ] `tailscale up` opens the browser login, and setup continues after sign-in.
 - [ ] `--prereqs` mode run by an AI installer ends with `[OK] Prerequisites ready.` (exit 0).
 - [ ] Real `claude mcp remove/add -s user herald` (only the arguments were checked, with a fake claude).
+- [ ] AI CLI step (setup.bat [3/6]): real `winget install Anthropic.ClaudeCode`, Node.js LTS via winget
+      plus `npm install -g @openai/codex`, the PATH refresh finding `claude` / `codex` afterwards, and
+      `claude auth login` / `codex login` opening the browser. Only fakes were used: one run showed
+      `set /p` reads several lines from a pipe, so test answers by keyboard or a file, never a pipe.
 - [ ] Antigravity registration on a PC that really has Antigravity installed.
 - [ ] Tray UI: clicking **Start on Login** writes/removes the autostart entry, and starting a second
       tray shows the "Herald is already running" box.
@@ -22,6 +26,47 @@ Windows PC (or Windows Sandbox):
 
 Also pending: April, abby, leno and dv still run the old code. Pull master on each and restart the
 tray before relying on the single-instance mutex.
+
+### Plan for that PC: move the abby network's relay onto it
+
+Target: `cc — abby — <newpc>`, with `<newpc>` as the relay host (and an exec_shell peer too).
+abby goes back to being a plain peer. The blank-PC test above runs during step 1.
+
+Today abby (100.104.102.15) is the relay, on abby's Tailscale account (`abbyang.office@`), with
+abby's machine shared to cc's account. The order below matters: abby is switched over the **old**
+relay, so cc must not switch first or it loses abby.
+
+1. **On `<newpc>` (a human at the keyboard):** run `setup.bat`. Log in to Tailscale with **abby's**
+   account so abby and `<newpc>` see each other without sharing. Wizard answers: role `relay`, name
+   `<newpc>`, peers `abby,cc`, autostart yes. Write down the URL and token printed at the end.
+   If peers cannot connect later, allow inbound TCP 7700 in Windows Firewall.
+2. **Share `<newpc>` with cc (human, browser):** in abby's account at
+   https://login.tailscale.com/admin/machines, open `...` on `<newpc>`, then Share to cc's account,
+   and accept on cc. Sharing is per machine, so abby's existing share does not cover it.
+   Check from cc: `tailscale status` lists `<newpc>`'s 100.x address.
+3. **Check the new relay from cc** before touching anything: `check_relay(URL, token)` in
+   setup_wizard.py must return `ok`.
+4. **Switch abby to join (from cc, over the old relay):**
+   - `exec_shell("abby", "git -C C:\AI\Herald_MCP pull")` brings in the new wizard.
+   - The wizard kills abby's tray, and that tray is the process running the command, so start the
+     wizard detached:
+     `python -c "import subprocess; subprocess.Popen(r'python C:\AI\Herald_MCP\setup_wizard.py --role join --name abby --server-url <URL> --token <TOKEN> --peers cc --yes', stdout=open(r'C:\AI\Herald_MCP\wizard.log','w'), stderr=-2, creationflags=0x208)"`
+   - The join drops the relay keys (`host`, `port`), stops abby's relay and rewrites
+     `herald_autostart.vbs` to start only the tray.
+   - abby can now be reached only through the new relay.
+5. **Switch cc:** rerun `python setup_wizard.py --role join --name cc --server-url <URL> --token <TOKEN> --peers abby,<newpc> --yes`.
+   It replaces the default network and keeps `networks.april`. `config.json.bak-abby` is then obsolete.
+6. **Verify:**
+   - `exec_shell("abby", "hostname")` returns `MSI`, and `exec_shell("<newpc>", "hostname")` answers.
+   - abby's `C:\AI\Herald_MCP\wizard.log` ends with `[OK] Herald started`.
+   - No `server.py` process is left on abby.
+   - After a reboot of `<newpc>`, both peers come back without anyone touching them.
+7. **Docs:** update the abby row and PC table in the global `CLAUDE.md`, and the
+   `project_abby_network` memory: the relay host is now `<newpc>`, and cc's default network URL changed.
+
+If step 4 fails halfway (abby on neither relay): the old relay is still in abby's autostart until
+the wizard rewrites it, so a reboot of abby, or a human rerunning step 4's wizard command there,
+recovers it.
 
 ---
 

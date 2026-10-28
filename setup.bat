@@ -5,7 +5,8 @@ cd /d "%~dp0"
 rem !HERE! not %~dp0 below: %~dp0 expands while a ( ) block is parsed, so a ")" in the path would end the block.
 set "HERE=%~dp0"
 
-rem "setup.bat --prereqs": only check/install git, Python, Tailscale and pip deps; never prompts (AI installers).
+rem "setup.bat --prereqs [claude] [codex]": only check/install git, Python, Tailscale, pip deps and the named AI
+rem CLIs; never prompts (AI installers).
 set "PREREQ_ONLY="
 if /i "%~1"=="--prereqs" set "PREREQ_ONLY=1"
 set "NOWINGET="
@@ -20,10 +21,12 @@ if not defined PREREQ_ONLY (
     echo   - Is this PC hosting the relay for a NEW network, or JOINING an existing one?
     echo   - Joining: the relay URL ^(http://^<relay Tailscale IP^>:7700^) and its token.
     echo   - The Tailscale account to log in with. Setup installs Tailscale if it is missing.
+    echo   - For the AI CLI: a Claude Pro/Max account ^(Claude Code^) and/or a ChatGPT account ^(Codex^).
+    echo     The desktop apps alone are not enough - setup installs the CLI and asks you to log in.
     echo.
 )
 
-echo [1/5] Checking prerequisites: git, Python, Tailscale...
+echo [1/6] Checking prerequisites: git, Python, Tailscale...
 where git >nul 2>&1
 if errorlevel 1 call :install Git.Git "git"
 where git >nul 2>&1 && (echo   [OK] git) || (echo   WARNING: git not found - Herald runs without it, it is only needed for updates.)
@@ -67,13 +70,68 @@ if not defined TS (
 )
 
 echo.
-echo [2/5] Installing Python dependencies...
+echo [2/6] Installing Python dependencies...
 python -m pip install -r "!HERE!requirements.txt"
 if errorlevel 1 (
     echo.
     echo ERROR: pip install failed.
     if not defined PREREQ_ONLY pause
     exit /b 1
+)
+
+echo.
+echo [3/6] AI command-line agents: Claude Code CLI, Codex CLI ^(GPT^)...
+rem Herald reaches the AI through its CLI: the Claude / ChatGPT desktop apps alone cannot answer ask_peer
+rem or take work from other PCs. Interactive run: offers to install, then logs in. "--prereqs claude codex":
+rem installs only the CLIs named, never prompts and never logs in (the user signs in through a browser).
+set "WANT_CLAUDE="
+set "WANT_CODEX="
+if defined PREREQ_ONLY (
+    for %%a in (%*) do (
+        if /i "%%a"=="claude" set "WANT_CLAUDE=1"
+        if /i "%%a"=="codex" set "WANT_CODEX=1"
+    )
+) else if "%~1"=="" (
+    where claude >nul 2>&1
+    if errorlevel 1 (
+        set "ANS=y"
+        set /p "ANS=  Claude Code CLI not found. Install it - needed for Auto Reply and to control other PCs? (Y/n): "
+        if /i not "!ANS!"=="n" set "WANT_CLAUDE=1"
+    )
+    where codex >nul 2>&1
+    if errorlevel 1 (
+        set "ANS=n"
+        set /p "ANS=  Install Codex CLI too - GPT, signs in with a ChatGPT account? (y/N): "
+        if /i "!ANS!"=="y" set "WANT_CODEX=1"
+    )
+)
+if defined WANT_CLAUDE (
+    where claude >nul 2>&1 || call :install Anthropic.ClaudeCode "Claude Code CLI"
+)
+if defined WANT_CODEX (
+    where codex >nul 2>&1
+    if errorlevel 1 (
+        where npm >nul 2>&1 || call :install OpenJS.NodeJS.LTS "Node.js"
+        echo   Installing Codex CLI via npm...
+        call npm install -g @openai/codex
+        call :refresh_path
+    )
+)
+call :ai_status
+rem Login opens a browser, so only an interactive run without wizard flags does it.
+if not defined PREREQ_ONLY if "%~1"=="" (
+    set "DID_LOGIN="
+    if "!CLAUDE_STATE!"=="out" (
+        echo   Log in to Claude: a browser page opens - sign in, then come back to this window.
+        call claude auth login
+        set "DID_LOGIN=1"
+    )
+    if "!CODEX_STATE!"=="out" (
+        echo   Log in to Codex: choose "Sign in with ChatGPT" on the page that opens.
+        call codex login
+        set "DID_LOGIN=1"
+    )
+    if defined DID_LOGIN call :ai_status
 )
 if defined PREREQ_ONLY (
     echo.
@@ -82,7 +140,7 @@ if defined PREREQ_ONLY (
 )
 
 echo.
-echo [3/5] Herald configuration wizard...
+echo [4/6] Herald configuration wizard...
 rem Any arguments (e.g. --role join --name pc2 --server-url ... --token ... --yes) go to the wizard.
 python "!HERE!setup_wizard.py" %*
 if %ERRORLEVEL% neq 0 (
@@ -93,7 +151,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo [4/5] Registering with Claude Code...
+echo [5/6] Registering with Claude Code...
 rem Register the exact interpreter that has Herald's deps - a bare "python" may be another install.
 for /f "delims=" %%e in ('python -c "import sys; print(sys.executable)"') do set "PYEXE=%%e"
 where claude >nul 2>&1
@@ -132,7 +190,7 @@ if %ERRORLEVEL% equ 0 (
 
 :register_antigravity
 echo.
-echo [5/5] Registering with Antigravity...
+echo [6/6] Registering with Antigravity...
 set "AGY_FOUND="
 if exist "%LOCALAPPDATA%\agy\bin\agy.exe"                              set "AGY_FOUND=1"
 if exist "%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe"         set "AGY_FOUND=1"
@@ -171,6 +229,7 @@ echo  Setup complete. The wizard already started Herald.
 echo.
 echo  Next steps:
 echo  1. Restart Claude Code (or Antigravity) on PCs that control others.
+echo     Not logged in to an AI CLI yet? Run: claude auth login  /  codex login
 echo  2. From the controlling PC, verify with exec_shell(peer_name, "hostname").
 echo  3. Settings changed later? Rerun setup_wizard.py instead of editing config.json.
 echo ============================================
@@ -200,4 +259,23 @@ exit /b 0
 set "TS="
 for /f "delims=" %%t in ('where tailscale 2^>nul') do if not defined TS set "TS=%%t"
 if not defined TS if exist "%ProgramFiles%\Tailscale\tailscale.exe" set "TS=%ProgramFiles%\Tailscale\tailscale.exe"
+exit /b 0
+
+:ai_status
+rem Sets CLAUDE_STATE / CODEX_STATE to missing, out (installed, not logged in) or ok, and prints them.
+set "CLAUDE_STATE=missing"
+where claude >nul 2>&1 && set "CLAUDE_STATE=out"
+if "!CLAUDE_STATE!"=="out" (
+    call claude auth status 2>nul | findstr /r /c:"loggedIn.: true" >nul && set "CLAUDE_STATE=ok"
+)
+set "CODEX_STATE=missing"
+where codex >nul 2>&1 && set "CODEX_STATE=out"
+rem ponytail: codex has no stable status command across versions; its login writes this file.
+if "!CODEX_STATE!"=="out" if exist "%USERPROFILE%\.codex\auth.json" set "CODEX_STATE=ok"
+if "!CLAUDE_STATE!"=="ok" echo   [OK] Claude Code CLI, logged in
+if "!CLAUDE_STATE!"=="out" echo   Claude Code CLI installed but NOT logged in - run: claude auth login
+if "!CLAUDE_STATE!"=="missing" echo   Claude Code CLI not installed - this PC cannot answer ask_peer or control other PCs.
+if "!CODEX_STATE!"=="ok" echo   [OK] Codex CLI, logged in
+if "!CODEX_STATE!"=="out" echo   Codex CLI installed but NOT logged in - run: codex login
+if "!CODEX_STATE!"=="missing" if defined WANT_CODEX echo   WARNING: Codex CLI still not found - check the npm output above.
 exit /b 0

@@ -5,7 +5,8 @@ Agents communicate via a central relay server using MCP tools.
 
 ## Setup
 
-Humans: run `setup.bat` (installs git, Python and Tailscale if missing, pip deps, Tailscale login, then the wizard).
+Humans: run `setup.bat` (installs git, Python and Tailscale if missing, pip deps, Tailscale login, the Claude Code
+and/or Codex CLI with their logins, then the wizard).
 To change what the wizard asks (role, name, relay URL, token, peers), rerun `python setup_wizard.py` rather than
 editing `config.json`; other keys (`auto_reply`, `watch`, `notify`, ...) may be edited by hand — a rerun keeps them.
 
@@ -29,6 +30,12 @@ a real shell, or to double-click `setup.bat`.
    extra network (`--add-network LABEL`, needs `--peers`). An extra network lets this PC reach those
    peers, but it is only *controlled* through its default network.
 6. **Autostart** at logon? Yes for unattended PCs (the default).
+7. **AI CLI on this PC**: `claude` (Claude Code — the default; needed for Auto Reply and to control
+   other PCs), `codex` (Codex CLI — GPT, takes work handed over through `exec_shell`), both, or none
+   (the PC only runs commands it is sent). Say plainly that a desktop app (Claude Desktop, ChatGPT)
+   does not count: Herald drives the CLI. Claude Code needs a Claude Pro/Max account; Codex signs in
+   with a ChatGPT account (Go works). Past installs ended with no CLI, or one never logged in, and
+   `ask_peer` to those PCs silently got no answer — do not skip this question.
 
 **Getting the URL and token to the joining PC — the user carries them.** You run on the joining
 PC and cannot read the relay PC's files, so ask the user to copy them over and paste them into
@@ -53,7 +60,7 @@ When you install the **relay** yourself, the opposite applies: give the user the
 from the wizard output and tell them to paste both to whoever (or whichever AI) installs the
 other PCs.
 
-**Step 2 — Install the prerequisites: git, the code, Python, Tailscale, dependencies.**
+**Step 2 — Install the prerequisites: git, the code, Python, Tailscale, dependencies, AI CLIs.**
 - git: `git --version`. If missing:
   `winget install --id Git.Git --source winget --accept-source-agreements --accept-package-agreements`,
   then open a new shell (PATH is stale in the current one).
@@ -61,27 +68,38 @@ other PCs.
 - Everything else in one call — it checks each item and installs only what is missing, without prompting:
 
   ```
-  cmd /c "call C:\AI\Herald_MCP\setup.bat --prereqs"
+  cmd /c "call C:\AI\Herald_MCP\setup.bat --prereqs claude codex"
   ```
 
-  It installs Python 3.12 (user scope) and Tailscale via winget, reloads PATH itself, runs
-  `pip install -r requirements.txt`, and ends with `[OK] Prerequisites ready.` (exit code 0). A
+  List after `--prereqs` only the CLIs from question 7 (`claude`, `codex`, both, or neither). It
+  installs Python 3.12 (user scope) and Tailscale via winget, reloads PATH itself, runs
+  `pip install -r requirements.txt`, installs the named CLIs (Claude Code: winget
+  `Anthropic.ClaudeCode`; Codex: Node.js LTS via winget, then `npm install -g @openai/codex`), prints
+  each CLI's state, and ends with `[OK] Prerequisites ready.` (exit code 0). A
   non-zero exit means Python or pip failed — read the `ERROR:` line. Tailscale installs
   machine-wide, so **Windows shows an admin prompt on the desktop: ask the user to click Yes**, or
   the step waits. If winget itself is missing, the output says which tool to install by hand.
   All installs use `--source winget`: the default msstore source asks to accept terms and hangs a
   non-interactive shell.
-- If it prints `Tailscale is installed but not logged in`, that is expected on a fresh PC — Step 3.
+- If it prints `Tailscale is installed but not logged in` or `... CLI installed but NOT logged in`,
+  that is expected on a fresh PC — Step 3.
 
-**Step 3 — Tailscale login and sharing. The user does the browser parts; you verify.** You cannot
-log in or click Share for them. Ask them to, on every PC:
+**Step 3 — Logins and sharing. The user does the browser parts; you verify.** You cannot log in or
+click Share for them. Ask them to, on every PC:
 - log in to Tailscale (tray icon > Log in, or run `tailscale up` and open the link it prints);
 - make the PCs see each other: log every PC into the same Tailscale account, or have the relay PC's
   owner open https://login.tailscale.com/admin/machines, click `...` on the relay machine > Share,
-  and send the link to the other PC's account to accept.
+  and send the link to the other PC's account to accept;
+- log in to each AI CLI installed in Step 2, in a normal terminal window: `claude auth login`
+  and/or `codex login` (choose "Sign in with ChatGPT"). Both open a browser page.
 
-Then check yourself: `tailscale ip -4` prints this PC's `100.x.x.x` address, and on a joining PC
-`tailscale status` lists the relay PC's address. Do not continue until both hold.
+Then check yourself: `tailscale ip -4` prints this PC's `100.x.x.x` address, on a joining PC
+`tailscale status` lists the relay PC's address, `claude auth status` shows `"loggedIn": true`, and
+for Codex `%USERPROFILE%\.codex\auth.json` exists. Do not continue until all hold.
+
+If the tray will run **elevated** (e.g. a scheduled task with highest privileges), the browser login
+does not reach it: have the user run `claude setup-token` and store the printed token as the user
+environment variable `CLAUDE_CODE_OAUTH_TOKEN`, then restart the tray.
 
 **Step 4 — Run the wizard with every answer as a flag.** With `--yes` it never prompts; a missing
 answer makes it exit with `ERROR: no answer for '...'` instead of hanging.
