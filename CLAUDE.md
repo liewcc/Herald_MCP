@@ -207,6 +207,23 @@ Need the remote machine's AI to think, reason, or use tools?
 
 **Default: `exec_shell`** — it is faster, cheaper, and works even when no AI is running on the remote peer.
 
+## Ask model and effort before dispatching AI work
+
+Before the **first** task in a conversation that has another PC's AI do work (`ask_peer`, or
+`exec_shell` running `claude -p` / `codex exec`), ask the user which model and which effort to use.
+Ask with clickable choices (`AskUserQuestion`, two questions in one call), not free text:
+
+- Model: `opus` (Recommended), `sonnet`, `haiku` — for Codex on abby, its own model list
+- Effort: `low`, `medium`, `high` (Recommended), `xhigh`, `max`
+
+Ask once per conversation. Reuse the answer for every later dispatch in the same conversation,
+to any PC, and ask again only when the user asks to change the model or effort. Plain shell
+commands with no AI behind them (`Get-Date`, `git pull`, `tasklist`) need no question.
+
+Pass the choice on the command line: `claude -p --model <model> --effort <level> "..."`.
+`ask_peer` cannot set either — its auto-reply runs the remote CLI's default — so when the user
+picks something other than that default, dispatch through `exec_shell` + `claude -p` instead.
+
 ## exec_shell
 
 Runs a PowerShell command on a remote peer running `herald_tray.py`.
@@ -293,6 +310,8 @@ save_attachment(...)    # saves to local path
 2. **One action per `ask_peer`** — multi-step messages time out
 3. **No polling** — herald_tray uses SSE push; do not loop `get_pending` on a timer
 4. **Check the allowlist** — if a command is rejected, add a rule to `allowlist.json`
+5. **Ask model + effort once per conversation** — clickable choices before the first AI dispatch
+   to another PC; reuse them afterwards unless the user asks to change
 
 ## Prohibited Patterns
 
